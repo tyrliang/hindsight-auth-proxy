@@ -1,0 +1,15 @@
+# Build artifacts
+*.exe
+main
+hindsight_auth_proxy
+*.test
+.smoke-proxy-*
+
+# Local env (never commit; use .env.example as template)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

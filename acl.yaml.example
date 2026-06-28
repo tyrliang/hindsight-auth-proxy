@@ -1,0 +1,56 @@
+# hindsight-auth-proxy ACL
+#
+# Bank id glob patterns use Go path.Match syntax: * matches any run of
+# non-separator characters (bank ids never contain "/").
+#
+# Grant precedence (additive, not overriding):
+#   admins  → full access to every bank AND unscoped paths (metrics, docs, bank list)
+#   shared  → bank patterns accessible to every authenticated tailnet user
+#   teams   → bank patterns for all members of the named team
+#   users   → per-email bank patterns (additive on top of shared + team grants)
+#
+# Default deny: an email that matches no pattern is rejected with 403.
+# Reload without restart: send SIGHUP to the proxy process.
+
+admins:            # full access incl. enumeration/admin paths
+  - richard@brickeye.com
+
+shared:            # bank patterns every authenticated tailnet user may access
+  - org-*
+
+teams:
+  # Engineering — Software
+  sw:
+    banks: [team-sw-*]
+    members:
+      - alice@brickeye.com
+      - bob@brickeye.com
+  # Engineering — R&D
+  rnd:
+    banks: [team-rnd-*]
+    members:
+      - carol@brickeye.com
+  # Engineering — Hardware
+  hw:
+    banks: [team-hw-*]
+    members: []
+  # Executives
+  exec:
+    banks: [team-exec-*]
+    members: []
+  # General / cross-functional
+  gen:
+    banks: [team-gen-*]
+    members: []
+  # Finance
+  fin:
+    banks: [team-fin-*]
+    members: []
+
+users:             # per-person private grants, added to shared + team grants
+  alice@brickeye.com:
+    banks: [hermes-alice, scratch-alice-*]
+  bob@brickeye.com:
+    banks: [hermes-bob]
+  carol@brickeye.com:
+    banks: [hermes-carol]
