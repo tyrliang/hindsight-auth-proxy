@@ -15,5 +15,8 @@ FROM gcr.io/distroless/static
 WORKDIR /app
 
 COPY --from=builder /app/hindsight_auth_proxy /usr/local/bin/hindsight_auth_proxy
+# Bundle default ACL so the image works without a mounted volume.
+# Override at runtime by setting ACL_FILE to a mounted path.
+COPY acl.yaml.example /app/acl.yaml
 
 ENTRYPOINT ["/usr/local/bin/hindsight_auth_proxy"]

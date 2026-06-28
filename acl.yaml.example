@@ -48,6 +48,8 @@ teams:
     members: []
 
 users:             # per-person private grants, added to shared + team grants
+  richard@brickeye.com:
+    banks: [hermes-richard, scratch-richard-*]
   alice@brickeye.com:
     banks: [hermes-alice, scratch-alice-*]
   bob@brickeye.com:
