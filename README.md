@@ -12,8 +12,8 @@ Engineer (tailnet) ──→ ai-memory-dev:8888 (this proxy, tsnet node)
                         identity: Tailscale WhoIs → email
                         ACL: email + bank_id → allow / 403
                              │
-                             ▼  (ts.Dial over tailnet)
-                       hindsight-dev:8888 (tsnet node, fresh empty volume)
+                             ▼  (Railway private networking)
+                       hindsight-app:8888 (same Railway environment)
 ```
 
 Production Hindsight (`ai-memory-richard`, has data) is **never addressed** by this service.
@@ -61,10 +61,11 @@ Copy [`.env.example`](./.env.example) into Railway service variables.
 | `TS_STATE_DIR` | `/var/lib/tailscale` + Railway volume |
 | `TS_EPHEMERAL` | `false` (stable MagicDNS name) |
 | `LISTEN_PORT` | `8888` |
-| `HINDSIGHT_UPSTREAM_URL` | `http://hindsight-dev.baiji-cloud.ts.net:8888` (dev) |
+| `HINDSIGHT_UPSTREAM_URL` | `http://${{hindsight-app.RAILWAY_PRIVATE_DOMAIN}}:8888` — Railway private domain (reference) |
 | `HINDSIGHT_UPSTREAM_TOKEN` | `openssl rand -hex 32` — same value as Hindsight's `HINDSIGHT_API_TENANT_API_KEY` / `HINDSIGHT_API_MCP_AUTH_TOKEN` |
-| `ACL_FILE` | `/app/acl.yaml` (bake into image or mount as config) |
-| `DEV_IDENTITY_HEADER` | Empty in production; set to `X-Dev-User` for local dev mode |
+| `ACL_YAML_CONTENT` | Full YAML content of the ACL (Railway env var — update and redeploy to change) |
+| `ACL_FILE` | Fallback when `ACL_YAML_CONTENT` is not set; point to a mounted volume path |
+| `DEV_IDENTITY_HEADER` | Empty in production; set to `X-Dev-User` for local ACL testing |
 
 ## ACL editing and hot-reload
 
@@ -95,12 +96,25 @@ full-access API calls. It cannot be per-bank scoped. Access it directly on the t
 ./apps/hindsight-auth-proxy/scripts/deploy.sh help
 ```
 
-## Dev mode (local smoke test)
+## Testing
 
-Run a local Hindsight + the proxy without tsnet or Railway:
+### Unit tests
 
 ```bash
-# 1. Local Hindsight (no LLM key needed for path/ACL smoke tests)
+cd apps/hindsight-auth-proxy
+go test -race ./...
+```
+
+Covers `BankFromPath`, `Allowed`, `IsAdmin`, ACL load validation, proxy handler (healthz,
+401/403/200 routing, bearer injection, ACL hot-reload, concurrency).
+
+### Mode A — fully local (no Railway, no tailnet)
+
+Run a local Hindsight via Docker and the proxy in dev mode. No LLM key required for
+path/ACL assertion checks; real retain/recall needs a valid `HINDSIGHT_API_LLM_API_KEY`.
+
+```bash
+# 1. Local Hindsight
 docker run -p 8888:8888 \
   -e HINDSIGHT_API_TENANT_EXTENSION=hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension \
   -e HINDSIGHT_API_TENANT_API_KEY=test \
@@ -116,31 +130,62 @@ DEV_IDENTITY_HEADER=X-Dev-User \
   ACL_FILE=./acl.yaml.example \
   LISTEN_PORT=9090 \
   go run .
-
-# 3. Assertions (expected HTTP status in comment)
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Dev-User: alice@brickeye.com' localhost:9090/healthz           # 200
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Dev-User: alice@brickeye.com' localhost:9090/mcp/hermes-alice/ # 200
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Dev-User: alice@brickeye.com' localhost:9090/mcp/hermes-bob/   # 403
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Dev-User: alice@brickeye.com' localhost:9090/mcp/              # 403 (unscoped, not admin)
-curl -s -o /dev/null -w '%{http_code}\n' \
-  localhost:9090/mcp/hermes-alice/                                     # 401 (no identity header)
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Dev-User: richard@brickeye.com' localhost:9090/mcp/            # 200 (admin, unscoped)
 ```
 
-## Unit tests
+Or use the full integration smoke script (builds binary, runs assertions, cleans up):
 
 ```bash
-cd apps/hindsight-auth-proxy
-go test ./internal/authz/
+GO=/path/to/go bash apps/hindsight-auth-proxy/scripts/smoke-test.sh
 ```
 
-Tests cover `BankFromPath` (MCP + HTTP API paths, unscoped paths, edge cases) and
-`Allowed` (user grants, team grants, shared banks, admin bypass, unknown email).
+### Mode B — proxy local, Hindsight on Railway (ACL testing with injected identities)
+
+Use this when you only have one tailnet identity (e.g. the admin account) and need to test
+403 cases for non-admin users. The proxy runs locally in dev mode; the upstream is the real
+deployed Railway Hindsight reached via the tailnet forwarder. Any email can be injected as
+the caller identity — no second tailnet device needed.
+
+```bash
+DEV_IDENTITY_HEADER=X-Dev-User \
+  HINDSIGHT_UPSTREAM_URL=http://hindsight-dev.baiji-cloud.ts.net:8888 \
+  HINDSIGHT_UPSTREAM_TOKEN=<UPSTREAM_SECRET> \
+  ACL_FILE=./acl.yaml.example \
+  LISTEN_PORT=9090 \
+  go run .
+```
+
+Then assert HTTP status codes by injecting any identity:
+
+```bash
+BASE=http://localhost:9090
+
+# 200 — alice reaches her own bank (user grant)
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: alice@brickeye.com' $BASE/mcp/hermes-alice/
+
+# 403 — alice cannot reach bob's bank
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: alice@brickeye.com' $BASE/mcp/hermes-bob/
+
+# 403 — alice cannot reach rnd team bank (wrong team)
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: alice@brickeye.com' $BASE/mcp/team-rnd-experiments/
+
+# 403 — carol cannot reach sw team bank (wrong team)
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: carol@brickeye.com' $BASE/mcp/team-sw-roadmap/
+
+# 200 — shared bank accessible to any authenticated user
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: stranger@other.com' $BASE/mcp/org-handbook/
+
+# 403 — unknown user cannot reach private banks
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: stranger@other.com' $BASE/mcp/hermes-alice/
+
+# 401 — no identity header
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/mcp/hermes-alice/
+
+# 403 — non-admin cannot enumerate (unscoped path)
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Dev-User: alice@brickeye.com' $BASE/mcp/
+```
+
+> **Note**: writes (retain) go to the real Railway Hindsight database. Use disposable
+> bank IDs (`test-*`) or clean up after the session. 403 cases never reach the upstream.
 
 ## Deferred: prod cutover
 
