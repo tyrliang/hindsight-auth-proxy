@@ -1,4 +1,16 @@
-name: Build and push Docker image
+name: CI
+
+# Push to main  → test + build both arches natively (parallel) + merge multi-arch manifest.
+# Pull request  → test + build both arches (verify, no push).
+#
+# Why this structure:
+#  - test first: fast Go gate (~30s) before spending on docker builds.
+#  - native runners: ubuntu-latest (amd64) + ubuntu-24.04-arm (arm64) run simultaneously,
+#    each compiling their own arch at full CPU speed. No QEMU emulation overhead.
+#  - registry cache: build cache lives in GHCR per arch (buildcache-amd64 / buildcache-arm64).
+#    No GHA blob-storage export (which cost ~64s in the amd64-only run).
+#  - push-by-digest + merge: each arch job pushes a nameless digest; the merge job
+#    assembles the final multi-arch manifest under :latest and :<short-sha>.
 
 on:
   push:
@@ -6,45 +18,154 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ── 1. Fast test gate ────────────────────────────────────────────────────────
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test -race ./...
+
+  # ── 2a. Build linux/amd64 on a native amd64 runner ──────────────────────────
+  build-amd64:
+    name: build (linux/amd64)
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          # On push: push by digest (no tag yet; merge job tags later).
+          # On PR: build only (type=cacheonly) — validates the Dockerfile compiles.
+          outputs: >-
+            ${{ github.event_name == 'push'
+              && 'type=image,push-by-digest=true,name-canonical=true'
+              || 'type=cacheonly' }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ env.IMAGE }}
+          # Registry cache: persistent across runs, no blob-storage export step.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-amd64
+          cache-to: >-
+            ${{ github.event_name == 'push'
+              && format('type=registry,ref={0}:buildcache-amd64,mode=max', env.IMAGE)
+              || '' }}
+
+  # ── 2b. Build linux/arm64 on a native arm64 runner (parallel with 2a) ────────
+  build-arm64:
+    name: build (linux/arm64)
+    needs: [test]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          outputs: >-
+            ${{ github.event_name == 'push'
+              && 'type=image,push-by-digest=true,name-canonical=true'
+              || 'type=cacheonly' }}
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ env.IMAGE }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-arm64
+          cache-to: >-
+            ${{ github.event_name == 'push'
+              && format('type=registry,ref={0}:buildcache-arm64,mode=max', env.IMAGE)
+              || '' }}
+
+  # ── 3. Merge arch digests into a single multi-arch manifest ─────────────────
+  merge:
+    name: merge manifest
+    needs: [build-amd64, build-arm64]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
 
-      - name: Log in to GHCR
-        if: github.event_name == 'push'
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Create and push multi-arch manifest
+        env:
+          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:7}"
+          docker buildx imagetools create \
+            -t "${{ env.IMAGE }}:latest" \
+            -t "${{ env.IMAGE }}:${short_sha}" \
+            "${{ env.IMAGE }}@${AMD64_DIGEST}" \
+            "${{ env.IMAGE }}@${ARM64_DIGEST}"
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=,format=short
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Inspect final manifest
+        run: docker buildx imagetools inspect "${{ env.IMAGE }}:latest"
