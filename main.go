@@ -19,11 +19,32 @@ import (
 )
 
 func main() {
-	// Load ACL from disk before bringing up any listener.
-	acl, err := authz.Load(config.Cfg.ACLFile)
+	// ── Resolve ACL source ───────────────────────────────────────────────────
+	// ACL_YAML_CONTENT (env var) takes priority over ACL_FILE (disk path).
+	// This lets Railway operators update the ACL by editing a single variable
+	// and redeploying — no image rebuild, no volume mount needed.
+	aclPath := config.Cfg.ACLFile
+	if config.Cfg.ACLYamlContent != "" {
+		f, err := os.CreateTemp("", "hindsight-acl-*.yaml")
+		if err != nil {
+			logger.Stderr.Error("failed to create temp ACL file", slog.Any("error", err))
+			os.Exit(1)
+		}
+		if _, err := f.WriteString(config.Cfg.ACLYamlContent); err != nil {
+			logger.Stderr.Error("failed to write ACL_YAML_CONTENT to temp file", slog.Any("error", err))
+			os.Exit(1)
+		}
+		f.Close()
+		aclPath = f.Name()
+		logger.Stdout.Info("ACL loaded from ACL_YAML_CONTENT env var",
+			slog.String("temp-file", aclPath),
+		)
+	}
+
+	acl, err := authz.Load(aclPath)
 	if err != nil {
 		logger.Stderr.Error("failed to load ACL",
-			slog.String("file", config.Cfg.ACLFile),
+			slog.String("file", aclPath),
 			slog.Any("error", err),
 		)
 		os.Exit(1)
@@ -112,20 +133,24 @@ func main() {
 	}, acl, whoIs, dial)
 
 	// ── SIGHUP: hot-reload the ACL without downtime ───────────────────────────
+	// When ACL_YAML_CONTENT is set, the content is fixed for this process's
+	// lifetime — SIGHUP re-parses the same temp file (useful after manual edits
+	// to the temp file, e.g. via kubectl exec or railway shell). For Railway
+	// env-var updates, redeploy to pick up the new content.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGHUP)
 	go func() {
 		for range sigs {
-			newACL, err := authz.Load(config.Cfg.ACLFile)
+			newACL, err := authz.Load(aclPath)
 			if err != nil {
 				logger.Stderr.Error("ACL reload failed; keeping previous ACL",
-					slog.String("file", config.Cfg.ACLFile),
+					slog.String("file", aclPath),
 					slog.Any("error", err),
 				)
 				continue
 			}
 			h.SetACL(newACL)
-			logger.Stdout.Info("ACL reloaded", slog.String("file", config.Cfg.ACLFile))
+			logger.Stdout.Info("ACL reloaded", slog.String("file", aclPath))
 		}
 	}()
 
