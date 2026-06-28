@@ -54,20 +54,14 @@ type Config struct {
 	// Example: X-Dev-User
 	DevIdentityHeader string `env:"DEV_IDENTITY_HEADER"`
 
-	// EgressMappings are optional TCP egress tunnels through the tailnet.
-	// Each EGRESS_CONNECTION_MAPPING_[n] is "<listen_port>:<target_host>:<target_port>".
-	// The proxy binds a plain TCP listener on listen_port (all interfaces, Railway
-	// private network) and forwards connections to target via ts.Dial — resolving
-	// MagicDNS hostnames over the Tailscale network.
-	// Example: EGRESS_CONNECTION_MAPPING_01=4000:ai-proxy.baiji-cloud.ts.net:443
-	EgressMappings []EgressMapping
-}
-
-// EgressMapping is a single egress tunnel entry.
-type EgressMapping struct {
-	ListenPort int
-	TargetAddr string
-	TargetPort int
+	// ConnectProxyPort, when > 0, starts an HTTP CONNECT proxy on all interfaces
+	// (Railway private network) that tunnels HTTPS connections via ts.Dial.
+	// Set EGRESS_PROXY_PORT=4000 to enable. Clients then set:
+	//   HTTPS_PROXY=http://<this-service.railway.internal>:<port>
+	//   HINDSIGHT_API_LLM_BASE_URL=https://ai-proxy.baiji-cloud.ts.net/v1
+	// The CONNECT tunnel carries the original TLS so hostname verification passes.
+	// Only active in production (tsnet) mode — silently ignored in dev mode.
+	ConnectProxyPort int `env:"EGRESS_PROXY_PORT" envDefault:"0"`
 }
 
 // Cfg is the global parsed configuration, populated by init().
@@ -94,8 +88,6 @@ func init() {
 		}
 	}
 
-	// Parse EGRESS_CONNECTION_MAPPING_[n] entries (optional; no error if absent).
-	Cfg.EgressMappings = parseEgressMappings(os.Environ())
 
 	if len(errs) > 0 {
 		for _, e := range errs {

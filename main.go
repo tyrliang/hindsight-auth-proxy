@@ -133,59 +133,55 @@ func main() {
 			slog.String("upstream", config.Cfg.HindsightUpstreamURL),
 		)
 
-		// ── Egress TCP tunnels ────────────────────────────────────────────────
-		// Each EGRESS_CONNECTION_MAPPING_[n] binds a plain TCP listener on all
-		// interfaces (Railway private network) and dials the target via ts.Dial,
-		// resolving MagicDNS hostnames over the Tailscale network.
-		for _, m := range config.Cfg.EgressMappings {
-			egl, err := net.Listen("tcp", fmt.Sprintf(":%d", m.ListenPort))
+		// ── HTTP CONNECT proxy (EGRESS_PROXY_PORT) ───────────────────────────
+		// When EGRESS_PROXY_PORT > 0, start an HTTP CONNECT proxy on all
+		// interfaces so Railway-internal services can reach tailnet HTTPS
+		// endpoints via standard HTTPS_PROXY env var support (httpx, curl, etc).
+		// CONNECT carries the original TLS so hostname verification passes.
+		if config.Cfg.ConnectProxyPort > 0 {
+			proxyAddr := fmt.Sprintf(":%d", config.Cfg.ConnectProxyPort)
+			pl, err := net.Listen("tcp", proxyAddr)
 			if err != nil {
-				logger.Stderr.Error("egress listen failed",
-					slog.Int("port", m.ListenPort),
+				logger.Stderr.Error("connect proxy listen failed",
+					slog.Int("port", config.Cfg.ConnectProxyPort),
 					slog.Any("error", err),
 				)
 				os.Exit(1)
 			}
-			logger.Stdout.Info("egress tunnel listening",
-				slog.Int("listen_port", m.ListenPort),
-				slog.String("target", fmt.Sprintf("%s:%d", m.TargetAddr, m.TargetPort)),
+			logger.Stdout.Info("HTTP CONNECT proxy listening",
+				slog.Int("port", config.Cfg.ConnectProxyPort),
 			)
-			go func(l net.Listener, mapping config.EgressMapping) {
-				for {
-					src, err := l.Accept()
-					if err != nil {
-						logger.Stderr.Error("egress accept failed",
-							slog.Int("port", mapping.ListenPort), slog.Any("error", err))
-						continue
-					}
-					go func(src net.Conn) {
-						defer src.Close()
-						ctx, cancel := context.WithCancel(context.Background())
-						defer cancel()
-						dst, err := ts.Dial(ctx, "tcp",
-							fmt.Sprintf("%s:%d", mapping.TargetAddr, mapping.TargetPort))
-						if err != nil {
-							logger.Stderr.Error("egress dial failed",
-								slog.String("target", fmt.Sprintf("%s:%d", mapping.TargetAddr, mapping.TargetPort)),
-								slog.Any("error", err))
-							return
-						}
-						defer dst.Close()
-						var wg sync.WaitGroup
-						wg.Add(2)
-						pipe := func(a, b net.Conn) {
-							defer wg.Done()
-							io.Copy(a, b) //nolint:errcheck
-							if tc, ok := a.(*net.TCPConn); ok {
-								tc.CloseWrite() //nolint:errcheck
-							}
-						}
-						go pipe(dst, src)
-						pipe(src, dst)
-						wg.Wait()
-					}(src)
+			connectHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodConnect {
+					http.Error(w, "only CONNECT is supported", http.StatusMethodNotAllowed)
+					return
 				}
-			}(egl, m)
+				dst, err := ts.Dial(r.Context(), "tcp", r.Host)
+				if err != nil {
+					logger.Stderr.Error("CONNECT dial failed",
+						slog.String("target", r.Host), slog.Any("error", err))
+					http.Error(w, "dial failed: "+err.Error(), http.StatusBadGateway)
+					return
+				}
+				defer dst.Close()
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					http.Error(w, "hijack unsupported", http.StatusInternalServerError)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				src, _, err := hj.Hijack()
+				if err != nil {
+					return
+				}
+				defer src.Close()
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() { defer wg.Done(); io.Copy(dst, src) }() //nolint:errcheck
+				go func() { defer wg.Done(); io.Copy(src, dst) }() //nolint:errcheck
+				wg.Wait()
+			})
+			go http.Serve(pl, connectHandler) //nolint:errcheck
 		}
 	}
 
