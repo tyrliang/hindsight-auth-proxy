@@ -3,10 +3,11 @@ name: acl-revoke
 description: >
   Remove a bank access grant from the hindsight-auth-proxy ACL. Guides through
   removing a user's personal grants, removing team membership, revoking a shared
-  bank pattern, or removing admin access. Use when offboarding an employee or
-  tightening access. Warns about side effects before any change.
+  bank pattern, or removing admin access. Asks which environment (dev or prod),
+  warns about side effects, and enforces dev-first validation before any prod change.
+  Use when offboarding an employee or tightening access.
 license: MIT
-compatibility: Requires railway CLI (`railway`) or direct Railway dashboard access.
+compatibility: Requires railway CLI (`railway`).
 metadata:
   author: Brickeye
   version: "1.0"
@@ -16,18 +17,33 @@ metadata:
 
 Remove a bank access grant from the hindsight-auth-proxy ACL.
 
-The ACL is the single source of truth for who can access which memory banks.
-Removing a grant takes effect only after deploying — use the `acl-deploy` skill.
+## Environments
+
+| | Dev | Prod |
+|---|---|---|
+| Railway env | `dev` | `prod` |
+| Service name | `hindsight-auth-proxy` | `hindsight-auth-proxy` |
+| Proxy tailnet node | `ai-memory-dev` | `ai-memory` |
+| Who uses it | Test personas (alice, bob, carol) | Real Brickeye employees |
+| Risk | Low | **High — revocation is immediate after deploy** |
+
+**Ask the user which environment they want to change before doing anything.**
+For prod: a revoke blocks real employee access the moment the service restarts.
+Confirm they have tested the same change in dev and are ready.
 
 ## Setup
 
-Fetch the current ACL before editing:
+Fetch the current ACL for the target environment:
+
 ```bash
+# Dev
 railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy \
-  --environment dev        # or prod
+  --service hindsight-auth-proxy --environment dev > acl-dev.yaml
+
+# Prod
+railway variable get ACL_YAML_CONTENT \
+  --service hindsight-auth-proxy --environment prod > acl-prod.yaml
 ```
-Save it locally as `acl.yaml` to edit, then deploy the result.
 
 ## Ask the user
 
@@ -47,7 +63,7 @@ What to revoke?
 **Step A** — Remove from `users`:
 ```yaml
 users:
-  # DELETE the entire block for the departing person:
+  # DELETE the entire block for the departing person
   # alice@brickeye.com:
   #   banks: [hermes-alice, scratch-alice-*]
 ```
@@ -57,21 +73,22 @@ users:
 teams:
   sw:
     members:
-      # DELETE the line:
-      # - alice@brickeye.com
+      # DELETE: - alice@brickeye.com
   gen:
     members:
-      # DELETE the line:
-      # - alice@brickeye.com
+      # DELETE: - alice@brickeye.com
 ```
 
-**Side effects to be aware of:**
+If they were an admin, also remove from `admins`.
+
+**Side effects:**
 - Removing from `users` does NOT remove team membership — you must do both.
-- Removing from teams does NOT remove the personal bank entry — you must do both.
-- The personal bank (`hermes-alice`) and any scratch banks remain in Hindsight's
-  storage. Revocation prevents access but does not delete the data. Delete banks
-  explicitly via the Hindsight Control Plane if required.
-- If the person was an admin, also remove from `admins`.
+- The personal bank (`hermes-alice`) remains in Hindsight storage; revocation
+  prevents access but does not delete data. Delete via the Hindsight Control
+  Plane (`hindsight-dev.baiji-cloud.ts.net:9999` for dev, prod equivalent for prod)
+  if the data must be purged.
+- On prod: the employee loses access the moment the proxy redeploys.
+  Coordinate timing with the offboarding process.
 
 ### 2. Remove from a team
 
@@ -81,7 +98,7 @@ teams:
   sw:
     members:
       - bob@brickeye.com
-      # REMOVE: - alice@brickeye.com
+      # DELETE: - alice@brickeye.com
 ```
 
 Alice retains her personal bank grants and any other team memberships.
@@ -89,43 +106,40 @@ She loses access to all `team-sw-*` banks.
 
 ### 3. Remove a shared bank pattern
 
-Remove from `shared`:
 ```yaml
 shared:
   - org-*
-  # REMOVE: - public-*
+  # DELETE: - public-*
 ```
 
-⚠️ This immediately blocks **every user** from the pattern, including those with
-no other ACL entry. Verify no one actively depends on it before removing.
+⚠️ This blocks **every user** from the pattern, including those with no other ACL entry.
+On prod: verify no one actively uses it before removing.
+On dev: safe to test freely.
 
-To restrict a shared bank to specific teams instead of removing it entirely,
-move the pattern into the relevant `teams[slug].banks` lists and remove it
-from `shared`.
+To restrict a shared bank to specific teams rather than removing it, move the pattern
+into the relevant `teams[slug].banks` lists and remove it from `shared`.
 
 ### 4. Revoke admin
 
-Remove from `admins`:
 ```yaml
 admins:
-  # REMOVE: - formeradmin@brickeye.com
+  # DELETE: - formeradmin@brickeye.com
   - richard@brickeye.com
 ```
 
-The person's regular grants (team, users) remain active. They lose:
+The person's team and user grants remain active. They lose:
 - access to unscoped paths (`/mcp/`, `/v1/default/banks`)
 - access to banks outside their explicit grants
 
-## Verify
+## Verify locally before deploying
 
-After editing, test locally before deploying (no Railway changes yet):
+Test the edited ACL against dev Hindsight regardless of target environment:
 
 ```bash
-# Start proxy in dev mode
 DEV_IDENTITY_HEADER=X-Dev-User \
   HINDSIGHT_UPSTREAM_URL=http://hindsight-dev.baiji-cloud.ts.net:8888 \
-  HINDSIGHT_UPSTREAM_TOKEN=<token> \
-  ACL_FILE=./acl.yaml \
+  HINDSIGHT_UPSTREAM_TOKEN=<dev-token> \
+  ACL_FILE=./acl-dev.yaml \
   LISTEN_PORT=9090 \
   go run ./apps/hindsight-auth-proxy/.
 
@@ -133,7 +147,7 @@ DEV_IDENTITY_HEADER=X-Dev-User \
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H 'X-Dev-User: alice@brickeye.com' \
   http://localhost:9090/mcp/hermes-alice/
-# → 403 (after offboard) or 200 (only team revoked — personal bank still active)
+# → 403 (after full offboard) or 200 (only team revoked — personal bank still active)
 
 # Confirm other users are unaffected
 curl -s -o /dev/null -w '%{http_code}\n' \
