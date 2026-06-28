@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"main/internal/authz"
 	"main/internal/config"
@@ -94,6 +95,28 @@ func main() {
 			os.Exit(1)
 		}
 		defer ts.Close()
+
+		// ── Tailscale peer warm-up ────────────────────────────────────────────
+		// Pre-establish the peer route to EGRESS_WARMUP_TARGET so the first
+		// real CONNECT request completes within httpx's 5-second connect timeout.
+		if config.Cfg.EgressWarmupTarget != "" {
+			go func() {
+				logger.Stdout.Info("tailscale warm-up: dialing",
+					slog.String("target", config.Cfg.EgressWarmupTarget))
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				c, err := ts.Dial(ctx, "tcp", config.Cfg.EgressWarmupTarget)
+				if err != nil {
+					logger.Stderr.Error("tailscale warm-up: dial failed (ACL block or peer unreachable)",
+						slog.String("target", config.Cfg.EgressWarmupTarget),
+						slog.Any("error", err))
+					return
+				}
+				c.Close()
+				logger.Stdout.Info("tailscale warm-up: peer route established",
+					slog.String("target", config.Cfg.EgressWarmupTarget))
+			}()
+		}
 
 		ln, err = ts.Listen("tcp", fmt.Sprintf(":%d", config.Cfg.ListenPort))
 		if err != nil {

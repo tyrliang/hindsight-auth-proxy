@@ -62,6 +62,13 @@ type Config struct {
 	// The CONNECT tunnel carries the original TLS so hostname verification passes.
 	// Only active in production (tsnet) mode — silently ignored in dev mode.
 	ConnectProxyPort int `env:"EGRESS_PROXY_PORT" envDefault:"0"`
+
+	// EgressWarmupTarget, when set, fires a background ts.Dial to this address
+	// immediately after tsnet is up. This pre-establishes the Tailscale peer
+	// route so the first real CONNECT request completes within httpx's 5s connect
+	// timeout. Format: "host:port", e.g. "ai-proxy.baiji-cloud.ts.net:443".
+	// Only active in production (tsnet) mode.
+	EgressWarmupTarget string `env:"EGRESS_WARMUP_TARGET"`
 }
 
 // Cfg is the global parsed configuration, populated by init().
