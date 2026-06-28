@@ -49,6 +49,29 @@ jobs:
       - name: go test -race
         run: go test -race ./...
 
+
+  # ── 1b. Security integration test (parallel with docker builds) ──────────────
+  # Runs the full ACL security matrix (40+ cases) against a real Hindsight
+  # Docker container. Blocks the final image push so a security regression
+  # can never land in :latest. Runs on every push and PR to main.
+  security-test:
+    name: security integration test
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: ACL security integration test
+        run: bash scripts/integration-test.sh
+
   # ── 2a. Build linux/amd64 on a native amd64 runner ──────────────────────────
   build-amd64:
     name: build (linux/amd64)
@@ -137,7 +160,7 @@ jobs:
   # ── 3. Merge arch digests into a single multi-arch manifest ─────────────────
   merge:
     name: merge manifest
-    needs: [build-amd64, build-arm64]
+    needs: [build-amd64, build-arm64, security-test]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10

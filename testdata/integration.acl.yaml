@@ -1,0 +1,47 @@
+# testdata/integration.acl.yaml
+#
+# FROZEN integration-test ACL.
+# Used exclusively by scripts/integration-test.sh.
+#
+# Do NOT edit without updating integration-test.sh accordingly —
+# every case in that script is tied to a specific grant or deny here.
+# The set of identities and bank patterns is intentionally minimal and stable.
+#
+# Personas covered:
+#   richard@brickeye.com  → admin
+#   alice@brickeye.com    → sw team + gen team; personal bank hermes-alice
+#   bob@brickeye.com      → sw team only; personal bank hermes-bob
+#   carol@brickeye.com    → rnd team only; personal bank hermes-carol
+#   dave@brickeye.com     → no team; used to test shared-only access
+#   stranger@other.com    → completely unknown; used to test unknown-user rules
+
+admins:
+  - richard@brickeye.com
+
+shared:
+  - org-*
+
+teams:
+  sw:
+    banks: [team-sw-*]
+    members:
+      - alice@brickeye.com
+      - bob@brickeye.com
+  rnd:
+    banks: [team-rnd-*]
+    members:
+      - carol@brickeye.com
+  gen:
+    banks: [team-gen-*]
+    members:
+      - alice@brickeye.com
+
+users:
+  richard@brickeye.com:
+    banks: [hermes-richard, scratch-richard-*]
+  alice@brickeye.com:
+    banks: [hermes-alice, scratch-alice-*]
+  bob@brickeye.com:
+    banks: [hermes-bob]
+  carol@brickeye.com:
+    banks: [hermes-carol]
