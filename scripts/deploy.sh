@@ -78,21 +78,33 @@ Step 2 — Auth proxy (this service):
   Volume: /var/lib/tailscale (stable node identity across restarts).
 
   Set env vars (copy from ${app_dir}/.env.example):
-    TS_AUTHKEY              = non-ephemeral reusable key for ai-memory-dev node
-    TS_HOSTNAME             = ai-memory-dev
-    TS_STATE_DIR            = /var/lib/tailscale
-    TS_EPHEMERAL            = false
-    LISTEN_PORT             = 8888
-    HINDSIGHT_UPSTREAM_URL  = http://hindsight-app.railway.internal:8888
-    HINDSIGHT_UPSTREAM_TOKEN= <UPSTREAM_SECRET>
-    ACL_YAML_CONTENT        = <paste full YAML from acl.yaml.example>
+    TS_AUTHKEY                 = non-ephemeral reusable key for ai-memory-dev node
+    TS_HOSTNAME                = ai-memory-dev
+    TS_STATE_DIR               = /var/lib/tailscale
+    TS_EPHEMERAL               = false
+    LISTEN_PORT                = 8888
+    HINDSIGHT_UPSTREAM_URL     = http://hindsight-app.railway.internal:8888
+    HINDSIGHT_UPSTREAM_TOKEN   = <UPSTREAM_SECRET>
+    ACL_S3_ENDPOINT            = \${{<Bucket>.ENDPOINT}}          (Variable Reference)
+    ACL_S3_BUCKET              = \${{<Bucket>.BUCKET}}            (Variable Reference)
+    ACL_S3_KEY                 = acl.yaml
+    ACL_S3_REGION              = \${{<Bucket>.REGION}}            (Variable Reference)
+    ACL_S3_ACCESS_KEY_ID       = \${{<Bucket>.ACCESS_KEY_ID}}     (Variable Reference)
+    ACL_S3_SECRET_ACCESS_KEY   = \${{<Bucket>.SECRET_ACCESS_KEY}} (Variable Reference)
+
+  Create a Railway Storage Bucket in the dev environment, upload the initial ACL:
+    ./scripts/acl-sync.sh put dev acl.yaml.example   # (copy to acl.yaml first and edit)
 
   After deploy, confirm the proxy appears as ai-memory-dev on the tailnet.
 
 Step 3 — ACL
   Edit acl.yaml for your team (see: $0 print-acl-template).
-  Reload without restart: kill -HUP \$(pgrep hindsight_auth_proxy)
-  Proxy logs: "ACL reloaded" on success.
+  Upload and redeploy:
+    ./scripts/acl-sync.sh put dev acl.yaml
+    railway redeploy --service hindsight-auth-proxy --environment dev
+  Boot log: "ACL loaded source=s3:<bucket>/acl.yaml" on success.
+  Note: SIGHUP reload works for local/non-distroless runs only.
+  On Railway (distroless image), reload requires a redeploy.
 
 Step 4 — Dev E2E test
   From a tailnet device (not the proxy node itself):

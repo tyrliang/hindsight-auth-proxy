@@ -168,3 +168,44 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Error("Load of missing file should return error")
 	}
 }
+
+func TestLoadBytes(t *testing.T) {
+	t.Run("valid YAML returns expected ACL", func(t *testing.T) {
+		a, err := authz.LoadBytes([]byte(testACLYAML))
+		if err != nil {
+			t.Fatalf("LoadBytes: %v", err)
+		}
+		if len(a.Admins) != 1 || a.Admins[0] != "richard@brickeye.com" {
+			t.Errorf("unexpected admins: %v", a.Admins)
+		}
+		if !a.IsAdmin("richard@brickeye.com") {
+			t.Error("richard should be admin")
+		}
+		if !a.Allowed("alice@brickeye.com", "hermes-alice") {
+			t.Error("alice should be allowed hermes-alice")
+		}
+		if a.Allowed("carol@brickeye.com", "hermes-alice") {
+			t.Error("carol should not be allowed hermes-alice")
+		}
+	})
+
+	t.Run("malformed YAML returns error", func(t *testing.T) {
+		_, err := authz.LoadBytes([]byte("admins: [unclosed"))
+		if err == nil {
+			t.Error("malformed YAML should return error")
+		}
+	})
+
+	t.Run("invalid bank pattern returns error", func(t *testing.T) {
+		const badYAML = `
+admins: []
+shared: ["[invalid"]
+teams: {}
+users: {}
+`
+		_, err := authz.LoadBytes([]byte(badYAML))
+		if err == nil {
+			t.Error("invalid glob pattern should return error")
+		}
+	})
+}

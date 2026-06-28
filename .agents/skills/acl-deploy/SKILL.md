@@ -3,13 +3,13 @@ name: acl-deploy
 description: >
   Deploy an updated ACL to the hindsight-auth-proxy on Railway. Asks which
   environment (dev or prod), enforces dev-first validation before any prod deploy,
-  validates the YAML, saves a rollback backup, pushes ACL_YAML_CONTENT, triggers
+  validates the YAML locally, uploads it to the Railway Storage Bucket, triggers
   a redeploy, and verifies health. Use after acl-grant or acl-revoke.
 license: MIT
-compatibility: Requires railway CLI (`railway`).
+compatibility: Requires railway CLI (`railway`), aws CLI.
 metadata:
   author: Brickeye
-  version: "1.0"
+  version: "2.0"
 ---
 
 # ACL Deploy
@@ -24,7 +24,7 @@ Push an updated ACL to the hindsight-auth-proxy on Railway.
 | Proxy tailnet node | `ai-memory-dev` | `ai-memory` |
 | Healthz URL | `https://ai-memory-dev.baiji-cloud.ts.net:8888/healthz` | `https://ai-memory.baiji-cloud.ts.net:8888/healthz` |
 | Who is affected | Test personas only | Real Brickeye employees |
-| ACL_YAML_CONTENT | Independent variable | Independent variable |
+| ACL object | Independent per-env bucket | Independent per-env bucket |
 
 ## Ask the user
 
@@ -51,21 +51,24 @@ bash apps/hindsight-auth-proxy/scripts/integration-test.sh --acl-file ./acl-dev.
 
 All 50 cases must pass. If any fail, fix the ACL before continuing.
 
-### Step 2 — Save rollback
+### Step 2 — Save rollback backup
 
 ```bash
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment dev \
-  > acl-dev.backup.$(date +%Y%m%d-%H%M%S)
+./scripts/acl-sync.sh get dev acl-dev.backup.$(date +%Y%m%d-%H%M%S)
 ```
 
-### Step 3 — Push
+This downloads the current bucket `acl.yaml` to a timestamped file. Keep it until the
+change is confirmed stable. (If the Railway bucket has versioning enabled, previous
+versions are retained automatically — the timestamped backup is still good practice.)
+
+### Step 3 — Upload to bucket
 
 ```bash
-railway variable set \
-  "ACL_YAML_CONTENT=$(cat acl-dev.yaml)" \
-  --service hindsight-auth-proxy --environment dev
+./scripts/acl-sync.sh put dev acl-dev.yaml
 ```
+
+`acl-sync.sh put` validates the YAML before uploading. The proxy does not pick up the
+change until it restarts.
 
 ### Step 4 — Redeploy
 
@@ -73,6 +76,8 @@ railway variable set \
 railway redeploy --service hindsight-auth-proxy --environment dev
 railway status   --service hindsight-auth-proxy --environment dev
 ```
+
+The proxy fetches the new `acl.yaml` from S3 at boot. Boot log: `ACL loaded source=s3:<bucket>/acl.yaml`.
 
 ### Step 5 — Verify
 
@@ -96,9 +101,7 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 ### Dev rollback
 
 ```bash
-railway variable set \
-  "ACL_YAML_CONTENT=$(cat acl-dev.backup.<timestamp>)" \
-  --service hindsight-auth-proxy --environment dev
+./scripts/acl-sync.sh put dev acl-dev.backup.<timestamp>
 railway redeploy --service hindsight-auth-proxy --environment dev
 ```
 
@@ -123,18 +126,14 @@ bash apps/hindsight-auth-proxy/scripts/integration-test.sh --acl-file ./acl-prod
 ### Step 2 — Save rollback (keep this)
 
 ```bash
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment prod \
-  > acl-prod.backup.$(date +%Y%m%d-%H%M%S)
+./scripts/acl-sync.sh get prod acl-prod.backup.$(date +%Y%m%d-%H%M%S)
 echo "Backup saved — keep this until the change is confirmed stable in prod."
 ```
 
-### Step 3 — Push
+### Step 3 — Upload to bucket
 
 ```bash
-railway variable set \
-  "ACL_YAML_CONTENT=$(cat acl-prod.yaml)" \
-  --service hindsight-auth-proxy --environment prod
+./scripts/acl-sync.sh put prod acl-prod.yaml
 ```
 
 ### Step 4 — Redeploy
@@ -168,17 +167,8 @@ railway logs --service hindsight-auth-proxy --environment prod \
 ### Prod rollback
 
 ```bash
-railway variable set \
-  "ACL_YAML_CONTENT=$(cat acl-prod.backup.<timestamp>)" \
-  --service hindsight-auth-proxy --environment prod
+./scripts/acl-sync.sh put prod acl-prod.backup.<timestamp>
 railway redeploy --service hindsight-auth-proxy --environment prod
-```
-
-Or use SIGHUP for zero-downtime reload if the proxy process is still running
-(Railway console shell or exec session):
-```bash
-kill -HUP $(pgrep hindsight_auth_proxy)
-# Proxy logs: "ACL reloaded" on success, "ACL reload failed; keeping previous ACL" on error
 ```
 
 ## Output

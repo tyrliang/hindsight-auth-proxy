@@ -7,10 +7,10 @@ description: >
   (dev or prod) and enforces dev-first validation before any prod change.
   Use when onboarding a new employee, creating a new team bank, or expanding access.
 license: MIT
-compatibility: Requires railway CLI (`railway`).
+compatibility: Requires railway CLI (`railway`), aws CLI.
 metadata:
   author: Brickeye
-  version: "1.0"
+  version: "2.0"
 ---
 
 # ACL Grant
@@ -37,12 +37,10 @@ Fetch the current ACL for the target environment:
 
 ```bash
 # Dev
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment dev > acl-dev.yaml
+./scripts/acl-sync.sh get dev acl-dev.yaml
 
 # Prod
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment prod > acl-prod.yaml
+./scripts/acl-sync.sh get prod acl-prod.yaml
 ```
 
 Edit the appropriate file locally, then use `acl-deploy` to push.

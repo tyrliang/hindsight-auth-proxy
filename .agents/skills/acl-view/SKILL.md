@@ -2,14 +2,15 @@
 name: acl-view
 description: >
   Show and explain the current hindsight-auth-proxy ACL for dev or prod.
-  Fetches ACL_YAML_CONTENT from the target Railway environment, renders who
-  has access to what, and can compute the effective access for a given email.
-  Use to audit access, answer "who can see bank X?", or verify a change before deploying.
+  Downloads the ACL object from the Railway Storage Bucket for the target
+  environment, renders who has access to what, and can compute the effective
+  access for a given email. Use to audit access, answer "who can see bank X?",
+  or verify a change before deploying.
 license: MIT
-compatibility: Requires railway CLI (`railway`).
+compatibility: Requires railway CLI (`railway`), aws CLI.
 metadata:
   author: Brickeye
-  version: "1.0"
+  version: "2.0"
 ---
 
 # ACL View
@@ -26,19 +27,19 @@ Show and explain the current hindsight-auth-proxy ACL.
 | ACL may differ? | Yes — dev may have test grants not in prod | Yes — prod is the source of truth for real access |
 
 **Ask the user which environment to inspect.** Dev and prod maintain independent
-`ACL_YAML_CONTENT` variables; a grant in one does not imply a grant in the other.
+bucket objects (`acl.yaml`); a grant in one does not imply a grant in the other.
 
 ## Fetch the current ACL
 
 ```bash
 # Dev
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment dev
+./scripts/acl-sync.sh get dev
 
 # Prod
-railway variable get ACL_YAML_CONTENT \
-  --service hindsight-auth-proxy --environment prod
+./scripts/acl-sync.sh get prod
 ```
+
+This downloads the bucket `acl.yaml` to `acl-<env>.yaml` in the current directory.
 
 ## Ask the user
 

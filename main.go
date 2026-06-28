@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"main/internal/aclsource"
 	"main/internal/authz"
 	"main/internal/config"
 	"main/internal/logger"
@@ -20,35 +22,31 @@ import (
 
 func main() {
 	// ── Resolve ACL source ───────────────────────────────────────────────────
-	// ACL_YAML_CONTENT (env var) takes priority over ACL_FILE (disk path).
-	// This lets Railway operators update the ACL by editing a single variable
-	// and redeploying — no image rebuild, no volume mount needed.
-	aclPath := config.Cfg.ACLFile
-	if config.Cfg.ACLYamlContent != "" {
-		f, err := os.CreateTemp("", "hindsight-acl-*.yaml")
-		if err != nil {
-			logger.Stderr.Error("failed to create temp ACL file", slog.Any("error", err))
-			os.Exit(1)
-		}
-		if _, err := f.WriteString(config.Cfg.ACLYamlContent); err != nil {
-			logger.Stderr.Error("failed to write ACL_YAML_CONTENT to temp file", slog.Any("error", err))
-			os.Exit(1)
-		}
-		f.Close()
-		aclPath = f.Name()
-		logger.Stdout.Info("ACL loaded from ACL_YAML_CONTENT env var",
-			slog.String("temp-file", aclPath),
-		)
-	}
+	// S3 mode (ACL_S3_BUCKET set): fetch YAML from the Railway Storage Bucket.
+	// File mode (ACL_FILE, default): read a YAML file from disk — local dev/tests.
+	src := aclsource.New(config.Cfg.ACLFile, aclsource.S3{
+		Endpoint:        config.Cfg.ACLS3Endpoint,
+		Bucket:          config.Cfg.ACLS3Bucket,
+		Key:             config.Cfg.ACLS3Key,
+		Region:          config.Cfg.ACLS3Region,
+		AccessKeyID:     config.Cfg.ACLS3AccessKeyID,
+		SecretAccessKey: config.Cfg.ACLS3SecretAccessKey,
+		UsePathStyle:    config.Cfg.ACLS3UsePathStyle,
+	})
 
-	acl, err := authz.Load(aclPath)
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	aclData, aclSrc, err := src.Fetch(fetchCtx)
+	cancel()
 	if err != nil {
-		logger.Stderr.Error("failed to load ACL",
-			slog.String("file", aclPath),
-			slog.Any("error", err),
-		)
+		logger.Stderr.Error("failed to fetch ACL", slog.Any("error", err))
 		os.Exit(1)
 	}
+	acl, err := authz.LoadBytes(aclData)
+	if err != nil {
+		logger.Stderr.Error("failed to load ACL", slog.String("source", aclSrc), slog.Any("error", err))
+		os.Exit(1)
+	}
+	logger.Stdout.Info("ACL loaded", slog.String("source", aclSrc))
 
 	var (
 		ln    net.Listener
@@ -138,25 +136,32 @@ func main() {
 		DevIdentityHdr: config.Cfg.DevIdentityHeader,
 	}, acl, whoIs, nil)
 
-	// ── SIGHUP: hot-reload the ACL without downtime ───────────────────────────
-	// When ACL_YAML_CONTENT is set, the content is fixed for this process's
-	// lifetime — SIGHUP re-parses the same temp file (useful after manual edits
-	// to the temp file, e.g. via kubectl exec or railway shell). For Railway
-	// env-var updates, redeploy to pick up the new content.
+	// ── SIGHUP: re-fetch ACL from source (file or S3) ────────────────────────
+	// On SIGHUP the proxy re-fetches from the same source used at boot.
+	// Fetch or parse failure keeps the previous ACL — the proxy stays live.
+	// Note: on Railway (distroless image, no shell) the effective reload path is
+	// a service restart — SIGHUP is most useful for local / non-distroless runs.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGHUP)
 	go func() {
 		for range sigs {
-			newACL, err := authz.Load(aclPath)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			data, src1, err := src.Fetch(ctx)
+			cancel()
 			if err != nil {
-				logger.Stderr.Error("ACL reload failed; keeping previous ACL",
-					slog.String("file", aclPath),
+				logger.Stderr.Error("ACL reload failed (fetch); keeping previous ACL", slog.Any("error", err))
+				continue
+			}
+			newACL, err := authz.LoadBytes(data)
+			if err != nil {
+				logger.Stderr.Error("ACL reload failed (parse); keeping previous ACL",
+					slog.String("source", src1),
 					slog.Any("error", err),
 				)
 				continue
 			}
 			h.SetACL(newACL)
-			logger.Stdout.Info("ACL reloaded", slog.String("file", aclPath))
+			logger.Stdout.Info("ACL reloaded", slog.String("source", src1))
 		}
 	}()
 

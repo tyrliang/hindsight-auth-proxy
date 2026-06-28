@@ -36,17 +36,20 @@ type Config struct {
 	// Must match HINDSIGHT_API_TENANT_API_KEY / HINDSIGHT_API_MCP_AUTH_TOKEN on Hindsight.
 	UpstreamToken string `env:"HINDSIGHT_UPSTREAM_TOKEN,required"`
 
-	// ACLFile is the path to a YAML ACL file on disk.
-	// Used when ACL_YAML_CONTENT is not set.
-	// Defaults to /app/acl.yaml but that path is NOT baked into the image —
-	// use ACL_YAML_CONTENT (preferred for Railway) or mount a volume.
+	// ACLFile is the path to a YAML ACL file on disk. Used when S3 is not
+	// configured (local dev, tests). Set ACL_FILE or use the ACL_S3_* vars below.
 	ACLFile string `env:"ACL_FILE" envDefault:"/app/acl.yaml"`
 
-	// ACLYamlContent is the raw YAML ACL content as an environment variable.
-	// When set it takes priority over ACL_FILE: the proxy writes the content
-	// to a temp file at startup and reloads from it on SIGHUP.
-	// Recommended for Railway deployments — update the variable and redeploy.
-	ACLYamlContent string `env:"ACL_YAML_CONTENT"`
+	// ── ACL S3 source (Railway Storage Bucket / any S3-compatible store) ──
+	// When ACL_S3_BUCKET is non-empty the proxy loads the ACL object from S3
+	// at boot (and re-fetches on SIGHUP); ACL_FILE is then ignored.
+	ACLS3Endpoint        string `env:"ACL_S3_ENDPOINT"`
+	ACLS3Bucket          string `env:"ACL_S3_BUCKET"`
+	ACLS3Key             string `env:"ACL_S3_KEY"`
+	ACLS3Region          string `env:"ACL_S3_REGION" envDefault:"us-east-1"`
+	ACLS3AccessKeyID     string `env:"ACL_S3_ACCESS_KEY_ID"`
+	ACLS3SecretAccessKey string `env:"ACL_S3_SECRET_ACCESS_KEY"`
+	ACLS3UsePathStyle    bool   `env:"ACL_S3_USE_PATH_STYLE" envDefault:"false"`
 
 	// DevIdentityHeader enables dev mode: plain TCP listener instead of tsnet,
 	// and reads the caller identity from this HTTP header instead of WhoIs.
@@ -76,6 +79,26 @@ func init() {
 		}
 		if Cfg.TSAuthKey == "" {
 			errs = append(errs, fmt.Errorf("TS_AUTHKEY is required when DEV_IDENTITY_HEADER is not set"))
+		}
+	}
+
+	// Validate S3 config: if the bucket is set all required fields must be present.
+	if Cfg.ACLS3Bucket != "" {
+		var missing []string
+		if Cfg.ACLS3Endpoint == "" {
+			missing = append(missing, "ACL_S3_ENDPOINT")
+		}
+		if Cfg.ACLS3Key == "" {
+			missing = append(missing, "ACL_S3_KEY")
+		}
+		if Cfg.ACLS3AccessKeyID == "" {
+			missing = append(missing, "ACL_S3_ACCESS_KEY_ID")
+		}
+		if Cfg.ACLS3SecretAccessKey == "" {
+			missing = append(missing, "ACL_S3_SECRET_ACCESS_KEY")
+		}
+		if len(missing) > 0 {
+			errs = append(errs, fmt.Errorf("ACL_S3_BUCKET set but missing: %v", missing))
 		}
 	}
 

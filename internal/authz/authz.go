@@ -45,7 +45,12 @@ func Load(p string) (*ACL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading ACL file %q: %w", p, err)
 	}
+	return LoadBytes(data)
+}
 
+// LoadBytes parses and validates raw ACL YAML. Every bank pattern is validated
+// with path.Match so runtime matching can never panic on a malformed pattern.
+func LoadBytes(data []byte) (*ACL, error) {
 	var a ACL
 	if err := yaml.Unmarshal(data, &a); err != nil {
 		return nil, fmt.Errorf("parsing ACL YAML: %w", err)

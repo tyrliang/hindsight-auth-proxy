@@ -63,26 +63,59 @@ Copy [`.env.example`](./.env.example) into Railway service variables.
 | `LISTEN_PORT` | `8888` |
 | `HINDSIGHT_UPSTREAM_URL` | `http://${{hindsight-app.RAILWAY_PRIVATE_DOMAIN}}:8888` — Railway private domain (reference) |
 | `HINDSIGHT_UPSTREAM_TOKEN` | `openssl rand -hex 32` — same value as Hindsight's `HINDSIGHT_API_TENANT_API_KEY` / `HINDSIGHT_API_MCP_AUTH_TOKEN` |
-| `ACL_YAML_CONTENT` | Full YAML content of the ACL (Railway env var — update and redeploy to change) |
-| `ACL_FILE` | Fallback when `ACL_YAML_CONTENT` is not set; point to a mounted volume path |
+| `ACL_S3_ENDPOINT` | `${{<Bucket>.ENDPOINT}}` — Railway Variable Reference to bucket endpoint |
+| `ACL_S3_BUCKET` | `${{<Bucket>.BUCKET}}` — Railway Variable Reference to bucket name |
+| `ACL_S3_KEY` | `acl.yaml` (fixed key name inside the bucket) |
+| `ACL_S3_REGION` | `${{<Bucket>.REGION}}` |
+| `ACL_S3_ACCESS_KEY_ID` | `${{<Bucket>.ACCESS_KEY_ID}}` |
+| `ACL_S3_SECRET_ACCESS_KEY` | `${{<Bucket>.SECRET_ACCESS_KEY}}` |
+| `ACL_S3_USE_PATH_STYLE` | `false` for Railway (virtual-hosted); `true` for local MinIO |
+| `ACL_FILE` | Fallback when `ACL_S3_BUCKET` is not set; point to a local file for dev/tests |
 | `DEV_IDENTITY_HEADER` | Empty in production; set to `X-Dev-User` for local ACL testing |
 
-## ACL editing and hot-reload
+## ACL editing and deployment
 
-Edit `acl.yaml` and send `SIGHUP` to the proxy process to reload without downtime:
+The ACL lives as `acl.yaml` in a Railway Storage Bucket — one per environment (dev and prod
+are fully isolated). To update:
 
 ```bash
-# In Railway: use the Railway CLI or console to send SIGHUP
-kill -HUP $(pgrep hindsight_auth_proxy)
+# Edit the ACL locally
+$EDITOR acl.yaml
+
+# Upload to the dev bucket (validates YAML first)
+./scripts/acl-sync.sh put dev acl.yaml
+
+# Redeploy the proxy — it re-fetches from S3 at boot
+railway redeploy --service hindsight-auth-proxy --environment dev
 ```
 
-The proxy logs `"ACL reloaded"` on success or `"ACL reload failed; keeping previous ACL"` on error.
+The proxy logs `ACL loaded source=s3:<bucket>/acl.yaml` on boot.
+
+**SIGHUP reload** re-fetches from the same source (file or S3) and is useful for local /
+non-distroless runs. On Railway (distroless image, no shell), the effective ACL reload
+path is a **service redeploy** — SIGHUP cannot be sent.
+
+**Rollback:** re-upload the previous ACL version and redeploy:
+```bash
+./scripts/acl-sync.sh get dev acl-dev.backup.$(date +%Y%m%d-%H%M%S)   # save current first
+./scripts/acl-sync.sh put dev acl-dev.backup.<timestamp>
+railway redeploy --service hindsight-auth-proxy --environment dev
+```
+Enable bucket versioning in the Railway dashboard if you want automatic revision history.
 
 See `acl.yaml.example` for the full schema. Key rules:
 - `admins` — full access including unscoped paths (metrics, docs, bank list). Limit to ops.
 - `shared` — patterns for every authenticated tailnet user (e.g. `org-*`).
 - `teams` — bank globs for team members. Team slugs match LiteLLM teams.
 - `users` — per-email private bank grants.
+
+## Reproducibility / config-as-code
+
+`railway.json` in the repo root defines the Docker build and restart policy — the Railway
+service is reproducible from a fresh environment. Settings not expressible in config-as-code
+(public networking **off**, the `/var/lib/tailscale` volume) are dashboard-only and documented
+in `scripts/deploy.sh help`. Each Railway environment gets its own independent bucket, so dev
+and prod ACLs never share an object.
 
 ## Control Plane UI note
 
