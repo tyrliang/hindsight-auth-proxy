@@ -36,8 +36,17 @@ type Config struct {
 	// Must match HINDSIGHT_API_TENANT_API_KEY / HINDSIGHT_API_MCP_AUTH_TOKEN on Hindsight.
 	UpstreamToken string `env:"HINDSIGHT_UPSTREAM_TOKEN,required"`
 
-	// ACLFile is the path to the YAML ACL file (bank allowlists per email/team).
+	// ACLFile is the path to a YAML ACL file on disk.
+	// Used when ACL_YAML_CONTENT is not set.
+	// Defaults to /app/acl.yaml but that path is NOT baked into the image —
+	// use ACL_YAML_CONTENT (preferred for Railway) or mount a volume.
 	ACLFile string `env:"ACL_FILE" envDefault:"/app/acl.yaml"`
+
+	// ACLYamlContent is the raw YAML ACL content as an environment variable.
+	// When set it takes priority over ACL_FILE: the proxy writes the content
+	// to a temp file at startup and reloads from it on SIGHUP.
+	// Recommended for Railway deployments — update the variable and redeploy.
+	ACLYamlContent string `env:"ACL_YAML_CONTENT"`
 
 	// DevIdentityHeader enables dev mode: plain TCP listener instead of tsnet,
 	// and reads the caller identity from this HTTP header instead of WhoIs.
