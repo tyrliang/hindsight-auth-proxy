@@ -19,8 +19,7 @@ print-acl-template)
   ;;
 
 print-hindsight-env)
-  # Prints the required environment variables for the upstream Hindsight dev instance.
-  # Set these on the hindsight-dev Railway service (dev environment).
+  # Env vars for the ghcr.io/vectorize-io/hindsight:latest service in Railway dev.
   cat <<'EOF'
 hindsight-dev Railway service variables (dev environment):
 
@@ -32,16 +31,23 @@ hindsight-dev Railway service variables (dev environment):
   HINDSIGHT_API_MCP_STATELESS=true
   HINDSIGHT_API_MCP_ENABLED_TOOLS=retain,recall,reflect,list_memories,get_memory,list_tags,list_mental_models,get_mental_model,list_directives,list_documents,get_document,get_bank,get_bank_stats
 
-  # Tailscale (join tailnet as hindsight-dev):
-  TS_AUTHKEY=tskey-auth-...   # non-ephemeral, tagged
-  TS_HOSTNAME=hindsight-dev
-  TS_STATE_DIR=/var/lib/tailscale  # + Railway volume at /var/lib/tailscale
-  TS_EPHEMERAL=false
+  # Tailscale sidecar (ts-hindsight forwarder) — separate Railway service:
+  # Image: ghcr.io/brody192/tailscale-forwarder:v0.0.8
+  #   TS_AUTHKEY=tskey-auth-...       # non-ephemeral key for hindsight-dev node
+  #   TS_HOSTNAME=hindsight-dev
+  #   TS_STATE_DIR=/data              # + Railway volume at /data
+  #   TS_EPHEMERAL=false
+  #   TS_DEBUG_MTU=1200
+  #   CONNECTION_MAPPING_01=8888:${{hindsight-app.RAILWAY_PRIVATE_DOMAIN}}:8888
+  #   CONNECTION_MAPPING_02=https:443:${{hindsight-app.RAILWAY_PRIVATE_DOMAIN}}:9999
+  #
+  # CONNECTION_MAPPING_01: port 8888  → Hindsight API + MCP
+  # CONNECTION_MAPPING_02: HTTPS :443 → Hindsight Control Plane UI (:9999)
 
-  # Volume: fresh empty disk at /home/hindsight/.pg0
+  # Volume: fresh empty disk at /home/hindsight/.pg0 (pgvector data)
   # NEVER mount, clone, or reference the prod volume.
 
-UPSTREAM_SECRET must equal HINDSIGHT_UPSTREAM_TOKEN on the proxy.
+UPSTREAM_SECRET must equal HINDSIGHT_UPSTREAM_TOKEN on the hindsight-auth-proxy.
 EOF
   ;;
 
@@ -72,17 +78,14 @@ Step 2 — Auth proxy (this service):
   Volume: /var/lib/tailscale (stable node identity across restarts).
 
   Set env vars (copy from ${app_dir}/.env.example):
-    TS_AUTHKEY        = non-ephemeral reusable key
-    TS_HOSTNAME       = ai-memory-dev
-    TS_STATE_DIR      = /var/lib/tailscale
-    TS_EPHEMERAL      = false
-    LISTEN_PORT       = 8888
-    HINDSIGHT_UPSTREAM_URL   = http://hindsight-dev.baiji-cloud.ts.net:8888
-    HINDSIGHT_UPSTREAM_TOKEN = <UPSTREAM_SECRET>
-    ACL_FILE          = /app/acl.yaml
-
-  Bake acl.yaml into the image (COPY acl.yaml /app/acl.yaml in Dockerfile)
-  or mount it as a Railway config file / volume.
+    TS_AUTHKEY              = non-ephemeral reusable key for ai-memory-dev node
+    TS_HOSTNAME             = ai-memory-dev
+    TS_STATE_DIR            = /var/lib/tailscale
+    TS_EPHEMERAL            = false
+    LISTEN_PORT             = 8888
+    HINDSIGHT_UPSTREAM_URL  = http://hindsight-app.railway.internal:8888
+    HINDSIGHT_UPSTREAM_TOKEN= <UPSTREAM_SECRET>
+    ACL_YAML_CONTENT        = <paste full YAML from acl.yaml.example>
 
   After deploy, confirm the proxy appears as ai-memory-dev on the tailnet.
 
