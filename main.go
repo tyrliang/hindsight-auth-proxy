@@ -53,7 +53,10 @@ func main() {
 	var (
 		ln    net.Listener
 		whoIs proxy.WhoIsFunc
-		dial  proxy.DialFunc
+		// dial is intentionally nil: upstream traffic goes via the host network
+		// (Railway private networking, localhost in dev mode), not through the
+		// tailnet. The tailnet is used only for the client-facing listener and
+		// WhoIs identity — not for the proxy → Hindsight leg.
 	)
 
 	if config.Cfg.DevIdentityHeader != "" {
@@ -114,8 +117,11 @@ func main() {
 			return resp.UserProfile.LoginName, nil
 		}
 
-		// Route upstream traffic through the tailnet.
-		dial = ts.Dial
+		// Upstream uses the host network (Railway private networking).
+		// Do NOT use ts.Dial here: machine-to-machine tailnet connections
+		// between two Railway services are blocked by ACL and unnecessary —
+		// HINDSIGHT_UPSTREAM_URL should point to the service's Railway private
+		// domain (e.g. http://hindsight-app.railway.internal:8888).
 
 		logger.Stdout.Info("🚀 Starting hindsight-auth-proxy",
 			slog.String("ts-hostname", config.Cfg.TSHostname),
@@ -130,7 +136,7 @@ func main() {
 		UpstreamURL:    config.Cfg.HindsightUpstreamURL,
 		UpstreamToken:  config.Cfg.UpstreamToken,
 		DevIdentityHdr: config.Cfg.DevIdentityHeader,
-	}, acl, whoIs, dial)
+	}, acl, whoIs, nil)
 
 	// ── SIGHUP: hot-reload the ACL without downtime ───────────────────────────
 	// When ACL_YAML_CONTENT is set, the content is fixed for this process's
