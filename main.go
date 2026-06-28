@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"main/internal/authz"
@@ -130,6 +132,61 @@ func main() {
 			slog.Int("listen-port", config.Cfg.ListenPort),
 			slog.String("upstream", config.Cfg.HindsightUpstreamURL),
 		)
+
+		// ── Egress TCP tunnels ────────────────────────────────────────────────
+		// Each EGRESS_CONNECTION_MAPPING_[n] binds a plain TCP listener on all
+		// interfaces (Railway private network) and dials the target via ts.Dial,
+		// resolving MagicDNS hostnames over the Tailscale network.
+		for _, m := range config.Cfg.EgressMappings {
+			egl, err := net.Listen("tcp", fmt.Sprintf(":%d", m.ListenPort))
+			if err != nil {
+				logger.Stderr.Error("egress listen failed",
+					slog.Int("port", m.ListenPort),
+					slog.Any("error", err),
+				)
+				os.Exit(1)
+			}
+			logger.Stdout.Info("egress tunnel listening",
+				slog.Int("listen_port", m.ListenPort),
+				slog.String("target", fmt.Sprintf("%s:%d", m.TargetAddr, m.TargetPort)),
+			)
+			go func(l net.Listener, mapping config.EgressMapping) {
+				for {
+					src, err := l.Accept()
+					if err != nil {
+						logger.Stderr.Error("egress accept failed",
+							slog.Int("port", mapping.ListenPort), slog.Any("error", err))
+						continue
+					}
+					go func(src net.Conn) {
+						defer src.Close()
+						ctx, cancel := context.WithCancel(context.Background())
+						defer cancel()
+						dst, err := ts.Dial(ctx, "tcp",
+							fmt.Sprintf("%s:%d", mapping.TargetAddr, mapping.TargetPort))
+						if err != nil {
+							logger.Stderr.Error("egress dial failed",
+								slog.String("target", fmt.Sprintf("%s:%d", mapping.TargetAddr, mapping.TargetPort)),
+								slog.Any("error", err))
+							return
+						}
+						defer dst.Close()
+						var wg sync.WaitGroup
+						wg.Add(2)
+						pipe := func(a, b net.Conn) {
+							defer wg.Done()
+							io.Copy(a, b) //nolint:errcheck
+							if tc, ok := a.(*net.TCPConn); ok {
+								tc.CloseWrite() //nolint:errcheck
+							}
+						}
+						go pipe(dst, src)
+						pipe(src, dst)
+						wg.Wait()
+					}(src)
+				}
+			}(egl, m)
+		}
 	}
 
 	h := proxy.New(proxy.Options{
