@@ -1,0 +1,57 @@
+# hindsight-auth-proxy ACL
+# Updated: 2026-06-29 — real users wired in (richard/jessica/timw/sleiman); per-user private banks
+#
+# Bank id glob patterns use Go path.Match syntax.
+# Default deny: email with no matching pattern → 403.
+# Reload without restart: redeploy (ACL_YAML_CONTENT env var).
+
+admins:
+  - richard@brickeye.com        # full access incl. unscoped paths
+
+shared:                          # every authenticated tailnet user
+  - org-*
+
+teams:
+  # Engineering — Software
+  sw:
+    banks: [team-sw, team-sw-*]
+    members:
+      - timw@brickeye.com
+
+  # Engineering — R&D
+  rnd:
+    banks: [team-rnd, team-rnd-*]
+    members: []
+
+  # Engineering — Hardware
+  hw:
+    banks: [team-hw, team-hw-*]
+    members:
+      - jessica@brickeye.com
+
+  # Product
+  product:
+    banks: [team-product, team-product-*]
+    members:
+      - sleiman@brickeye.com
+
+  # Executives
+  exec:
+    banks: [team-exec, team-exec-*]
+    members:
+      - richard@brickeye.com
+
+  # Finance
+  fin:
+    banks: [team-fin, team-fin-*]
+    members: []
+
+users:
+  richard@brickeye.com:
+    banks: [user-richard]
+  jessica@brickeye.com:
+    banks: [user-jessica]
+  timw@brickeye.com:
+    banks: [user-timw]
+  sleiman@brickeye.com:
+    banks: [user-sleiman]
