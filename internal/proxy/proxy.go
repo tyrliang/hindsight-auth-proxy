@@ -70,11 +70,7 @@ func New(opts Options, acl *authz.ACL, whoIs WhoIsFunc, dial DialFunc) *Handler 
 	}
 
 	rp := httputil.NewSingleHostReverseProxy(upstreamURL)
-	rp.FlushInterval = 0 // 0 = no periodic flush; SSE is auto-detected by
-	// httputil.ReverseProxy.flushInterval() via text/event-stream content-type
-	// and overrides this with -1 automatically. For non-SSE responses this
-	// avoids flushing on every io.Copy write, which causes small repeated
-	// writes to tsnet's userspace TCP and severely limits throughput.
+	rp.FlushInterval = -1 // streaming / SSE support
 
 	token := opts.UpstreamToken
 	originalDirector := rp.Director
