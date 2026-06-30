@@ -80,11 +80,19 @@ func New(opts Options, acl *authz.ACL, whoIs WhoIsFunc, dial DialFunc) *Handler 
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
+	// Clone DefaultTransport so we never mutate the global.
+	// DisableCompression stops the transport from advertising Accept-Encoding: gzip;
+	// without it, FastAPI's GZipMiddleware compresses responses and strips
+	// Content-Length, causing the reverse proxy to re-encode the body as chunked.
+	// Chunked bodies stall when written over tsnet's userspace TCP stack — the same
+	// path that works fine on kernel TCP. Keeping the response uncompressed
+	// preserves the upstream Content-Length, which tsnet handles correctly.
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DisableCompression = true
 	if dial != nil {
-		rp.Transport = &http.Transport{
-			DialContext: dial,
-		}
+		t.DialContext = dial
 	}
+	rp.Transport = t
 
 	h := &Handler{
 		opts:  opts,
