@@ -69,6 +69,15 @@ type Config struct {
 	// timeout. Format: "host:port", e.g. "ai-proxy.baiji-cloud.ts.net:443".
 	// Only active in production (tsnet) mode.
 	EgressWarmupTarget string `env:"EGRESS_WARMUP_TARGET"`
+
+	// TailscaleServeMode=true: bind to 127.0.0.1 only (loopback),
+	// expecting tailscale serve to be the exclusive inbound gateway.
+	// Guards against Tailscale-User-Login spoofing via Railway private net.
+	TailscaleServeMode bool `env:"TAILSCALE_SERVE_MODE" envDefault:"false"`
+
+	// InternalPort: loopback port for the proxy binary when TailscaleServeMode=true.
+	// tailscale serve is configured to forward tailnet :ListenPort -> 127.0.0.1:InternalPort.
+	InternalPort int `env:"INTERNAL_PORT" envDefault:"8889"`
 }
 
 // Cfg is the global parsed configuration, populated by init().
@@ -85,13 +94,13 @@ func init() {
 		}
 	}
 
-	// TS_HOSTNAME and TS_AUTHKEY are required unless running in dev mode.
-	if Cfg.DevIdentityHeader == "" {
+	// TS_HOSTNAME and TS_AUTHKEY are required unless running in dev mode or serve mode.
+	if Cfg.DevIdentityHeader == "" && !Cfg.TailscaleServeMode {
 		if Cfg.TSHostname == "" {
-			errs = append(errs, fmt.Errorf("TS_HOSTNAME is required when DEV_IDENTITY_HEADER is not set"))
+			errs = append(errs, fmt.Errorf("TS_HOSTNAME is required when DEV_IDENTITY_HEADER is not set and TAILSCALE_SERVE_MODE is false"))
 		}
 		if Cfg.TSAuthKey == "" {
-			errs = append(errs, fmt.Errorf("TS_AUTHKEY is required when DEV_IDENTITY_HEADER is not set"))
+			errs = append(errs, fmt.Errorf("TS_AUTHKEY is required when DEV_IDENTITY_HEADER is not set and TAILSCALE_SERVE_MODE is false"))
 		}
 	}
 

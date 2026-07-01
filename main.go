@@ -62,8 +62,23 @@ func main() {
 		// WhoIs identity — not for the proxy → Hindsight leg.
 	)
 
-	if config.Cfg.DevIdentityHeader != "" {
-		// ── Dev mode ─────────────────────────────────────────────────────────
+	if config.Cfg.TailscaleServeMode {
+		// Tailscale serve fronts this listener.
+		// Bind to loopback only — Railway private net cannot reach 127.0.0.1
+		// on another service, so Tailscale-User-Login cannot be spoofed.
+		addr := fmt.Sprintf("127.0.0.1:%d", config.Cfg.InternalPort)
+		ln, err = net.Listen("tcp", addr)
+		if err != nil {
+			logger.Stderr.Error("serve-mode listen failed", slog.Any("error", err))
+			os.Exit(1)
+		}
+		logger.Stdout.Info("tailscale-serve mode",
+			slog.String("addr", addr),
+			slog.String("identity-header", config.Cfg.DevIdentityHeader),
+		)
+		// whoIs stays nil; resolveIdentity() reads DEV_IDENTITY_HEADER set
+		// to Tailscale-User-Login by entrypoint.sh.
+	} else if config.Cfg.DevIdentityHeader != "" {
 		// Plain TCP listener; identity comes from a request header.
 		// No tsnet, no tailscale deps at runtime.
 		ln, err = net.Listen("tcp", fmt.Sprintf(":%d", config.Cfg.ListenPort))

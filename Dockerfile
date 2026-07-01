@@ -10,10 +10,12 @@ COPY . ./
 
 RUN CGO_ENABLED=0 go build -o hindsight_auth_proxy -ldflags="-w -s" ./.
 
-FROM gcr.io/distroless/static
+FROM alpine:3.20
+RUN apk add --no-cache tailscale
 
 WORKDIR /app
-
 COPY --from=builder /app/hindsight_auth_proxy /usr/local/bin/hindsight_auth_proxy
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/usr/local/bin/hindsight_auth_proxy"]
+ENTRYPOINT ["/entrypoint.sh"]
