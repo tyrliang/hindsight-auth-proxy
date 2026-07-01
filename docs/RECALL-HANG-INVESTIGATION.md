@@ -10,12 +10,13 @@ and [Option A Validation](#option-a-validation-2026-07-01) below.
 
 ## Summary
 
-Two distinct bugs were found and investigated. One is fixed; one is not.
+Two distinct bugs were found. Both are resolved as of 2026-07-01 — see
+[Conclusion](#conclusion-non-issue-2026-07-01).
 
 | Bug | Symptom | Status |
 |---|---|---|
-| **Gzip decompress → chunked → tsnet stall** | All recall bodies = 0 bytes through proxy | ✅ Fixed — `DisableCompression=true` |
-| **tsnet userspace TCP throughput** | Large recalls (~60KB) crawl at ~6KB/s | ⚠️ Open — root cause confirmed, no fix yet |
+| **Gzip decompress → chunked → tsnet stall** | All recall bodies = 0 bytes through proxy | ✅ Fixed 2026-06-30 — `DisableCompression=true` |
+| **tsnet userspace TCP throughput** | Large recalls (~60KB) crawl at ~6KB/s | ✅ Resolved — does not reproduce as of 2026-07-01 (see [Option A Validation](#option-a-validation-2026-07-01)); root cause below was believed open until then |
 
 ---
 
@@ -56,7 +57,7 @@ rp.Transport = t
 
 ---
 
-## Bug 2: tsnet throughput degradation for large responses (Open)
+## Bug 2: tsnet throughput degradation for large responses (historical — resolved, see below)
 
 ### Symptom
 
@@ -66,6 +67,12 @@ After Bug 1 fix, small recalls work. Large recalls (user-richard, ~60KB body) re
 |---|---|---|---|
 | Direct via `hindsight.baiji-cloud.ts.net` | 60325B | 4.67s | ~573 KB/s |
 | Via proxy `ai-memory.baiji-cloud.ts.net` | ~29KB (partial) | 30s timeout | ~1 KB/s |
+
+> **2026-07-01 update:** this section documents the investigation as it stood on 2026-06-30.
+> As of 2026-07-01 this symptom no longer reproduces on either dev or prod — see
+> [Option A Validation](#option-a-validation-2026-07-01) and the
+> [Conclusion](#conclusion-non-issue-2026-07-01). The hypotheses and next steps below were
+> never acted on and are kept only for historical record.
 
 ### Investigation
 
@@ -121,7 +128,11 @@ If OMP REST recall is confirmed affected:
 
 ## Not Affected
 
-- Retain (`POST /memories`) — works on all banks, response always has `Content-Length`
+- Retain (`POST /memories`) — works on all banks tested, response always has `Content-Length`.
+  **2026-07-01 exception:** a dev-only silent write failure was found during Option A
+  validation — retain can return `HTTP 200` with billed tokens while persisting 0 items,
+  following a Postgres disk-full event on the dev DB. See
+  [Option A Validation](#option-a-validation-2026-07-01). Not observed on prod.
 - `/stats` — works, small `Content-Length` response
 - MCP `tools/list` / session init — works
 - ACL enforcement — works (403 returns immediately)
