@@ -1,7 +1,8 @@
 # hindsight-auth-proxy (Railway)
 
 Tailscale-identity authorizing reverse proxy for [Hindsight](https://hindsight.vectorize.io/).
-Enforces per-employee bank access via Tailscale `WhoIs` → `@brickeye.com` email → YAML bank allowlist.
+Enforces per-caller bank access via Tailscale `WhoIs` → identity (an employee's
+`@brickeye.com` login email, or a tagged agent node's tailnet hostname) → YAML bank allowlist.
 Deployed as a standalone tsnet node (`ai-memory-dev` in dev, `ai-memory` at prod cutover).
 
 ## Architecture
@@ -43,12 +44,60 @@ Team slugs: `gen`, `sw`, `rnd`, `hw`, `exec`, `fin` — match LiteLLM team slugs
 - Hindsight dev instance running as tsnet node `hindsight-dev` (Step 1 in the plan)
 - `acl.yaml` populated for your team (see `acl.yaml.example`)
 
+## Agent (tagged node) identity
+
+Callers are not always human. A Hermes assistant process can join the tailnet as a
+tagged node (e.g. `tag:agent`) with a stable hostname — `agent-product-assistant`,
+`agent-support-assistant`. Tagged nodes have no personal Tailscale login, so
+`internal/identity.Resolve` falls back to the node's short tailnet hostname instead
+of an email. Grant these in `acl.yaml`'s `users:` map exactly like an email grant,
+keyed by hostname (see `acl.yaml.example` and `acl.product-brain.yaml`):
+
+```yaml
+users:
+  agent-product-assistant:
+    banks: [team-product, team-product-*, team-fieldops, team-fieldops-*]
+  agent-support-assistant:
+    banks: [team-fieldops, team-fieldops-*]
+```
+
+This requires the proxy's tsnet listener (the default; see main.go's production
+branch) — `Node.Tags`/`Node.Name` are only visible via `LocalClient.WhoIs`, not via
+`tailscale serve`'s injected headers, which Tailscale never populates for tagged
+devices.
+
 ## Railway services (dev environment)
 
 | Service | Settings |
 |---------|----------|
 | **hindsight-auth-proxy** | This repo, root `apps/hindsight-auth-proxy`, Dockerfile; public URL **off**, private networking **on** |
 | **Volume** | `/var/lib/tailscale` for stable tsnet node identity |
+
+## Railway services (product-brain deployment)
+
+Separate deployment: fronts the `product-brain` project's own `hindsight` service
+(brain_ingest ingestion delivery — `team-product`/`team-fieldops` banks), not the
+personal ai-memory Hindsight above. Repoints the project's existing
+`tailscale-forwarder` service (previously an unused egress port-forwarder image)
+at this repo.
+
+| Service | Settings |
+|---------|----------|
+| **tailscale-forwarder** (product-brain) | This repo, Dockerfile source; public URL **off**, private networking **on** |
+| **Volume** | `/var/lib/tailscale` for stable tsnet node identity (`TS_EPHEMERAL=false`) |
+
+Env vars follow the same shape as below, with:
+- `TS_HOSTNAME` — the proxy's own tailnet identity (its inbound listener), independent of caller hostnames.
+- `HINDSIGHT_UPSTREAM_URL` = `http://hindsight.railway.internal:8888` (Railway private domain — the ingestion worker still talks to `hindsight` directly and unauthenticated over the same private network; this proxy only gates *tailnet* callers).
+- `ACL_YAML_CONTENT` = contents of `acl.product-brain.yaml` (grants `agent-product-assistant` and `agent-support-assistant`; see [Agent (tagged node) identity](#agent-tagged-node-identity)).
+
+**Residual gap:** the `hindsight` service in product-brain runs with no
+`HINDSIGHT_API_TENANT_API_KEY`/`HINDSIGHT_API_MCP_AUTH_TOKEN` configured (open on
+Railway's private network by design — the ingestion worker sends no token). This
+proxy's tailnet ACL is therefore the only gate for tailnet callers; Hindsight itself
+does not independently verify `HINDSIGHT_UPSTREAM_TOKEN`. Enabling
+`ApiKeyTenantExtension` on `hindsight` would add defense-in-depth but requires also
+updating the ingestion worker to send a matching key — out of scope here.
 
 ## Environment variables
 
@@ -81,7 +130,7 @@ See `acl.yaml.example` for the full schema. Key rules:
 - `admins` — full access including unscoped paths (metrics, docs, bank list). Limit to ops.
 - `shared` — patterns for every authenticated tailnet user (e.g. `org-*`).
 - `teams` — bank globs for team members. Team slugs match LiteLLM teams.
-- `users` — per-email private bank grants.
+- `users` — per-identity private bank grants: email (human) or tailnet hostname (tagged agent node).
 
 ## Control Plane UI note
 
@@ -136,11 +185,13 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ```bash
 cd apps/hindsight-auth-proxy
-go test ./internal/authz/
+go test ./...
 ```
 
-Tests cover `BankFromPath` (MCP + HTTP API paths, unscoped paths, edge cases) and
-`Allowed` (user grants, team grants, shared banks, admin bypass, unknown email).
+Tests cover `BankFromPath` (MCP + HTTP API paths, unscoped paths, edge cases),
+`Allowed` (user grants, team grants, shared banks, admin bypass, unknown identity),
+and `internal/identity.Resolve` (human vs. tagged-node identity, including that a
+tagged node's stale/creator `UserProfile` is never trusted over its hostname).
 
 ## Deferred: prod cutover
 

@@ -23,7 +23,9 @@ import (
 	"main/internal/logger"
 )
 
-// WhoIsFunc resolves the caller's email from their remote address.
+// WhoIsFunc resolves the caller's ACL identity from their remote address:
+// an email for a human tailnet user, or a tailnet hostname for a tagged
+// agent/service node (see internal/identity.Resolve).
 // Returns ("", nil) or an error when identity cannot be determined.
 // Nil in dev mode — the handler reads the identity from DevIdentityHdr instead.
 type WhoIsFunc func(ctx context.Context, addr string) (string, error)
@@ -168,7 +170,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rp.ServeHTTP(w, r)
 }
 
-// resolveIdentity returns the caller's email (lowercase, trimmed).
+// resolveIdentity returns the caller's ACL identity (lowercase, trimmed):
+// an email for a human, a tailnet hostname for a tagged agent node.
 // In dev mode it reads from opts.DevIdentityHdr; in production it calls WhoIs.
 func (h *Handler) resolveIdentity(r *http.Request) (string, error) {
 	var raw string

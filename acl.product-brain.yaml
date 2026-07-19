@@ -1,0 +1,27 @@
+# hindsight-auth-proxy ACL — product-brain instance
+# (Railway project product-brain, service tailscale-forwarder, fronting the
+# project's own `hindsight` service — brain_ingest ingestion delivery target.
+# NOT the personal ai-memory Hindsight; see acl.prod.yaml/acl.dev.yaml for that.)
+#
+# Bank id glob patterns use Go path.Match syntax.
+# Default deny: an identity with no matching pattern → 403.
+# Reload: update ACL_YAML_CONTENT in Railway and redeploy.
+#
+# Callers here are Hermes agent processes reaching this Hindsight instance
+# over the tailnet as tagged (non-human) nodes — see internal/identity.
+# `users:` keys below are their tailnet hostnames, not emails.
+
+admins:
+  - richard@brickeye.com   # ops: full access incl. unscoped/admin paths
+
+shared: []                  # no bank is open to every tailnet caller here
+
+teams: {}                    # no human teams on this instance; agents only
+
+users:
+  # Broader Hermes assistant: product roadmap/planning + fieldops context.
+  agent-product-assistant:
+    banks: [team-product, team-product-*, team-fieldops, team-fieldops-*]
+  # Support-scoped Hermes assistant: fieldops (Zendesk) tickets only.
+  agent-support-assistant:
+    banks: [team-fieldops, team-fieldops-*]

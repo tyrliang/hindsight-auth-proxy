@@ -1,10 +1,18 @@
 // Package authz implements bank-level access control for hindsight-auth-proxy.
 //
 // The ACL is a YAML file with four top-level keys:
-//   - admins:  emails that bypass all bank checks (full access incl. unscoped paths).
-//   - shared:  bank glob patterns accessible to every authenticated tailnet user.
+//   - admins:  identities that bypass all bank checks (full access incl. unscoped paths).
+//   - shared:  bank glob patterns accessible to every authenticated tailnet caller.
 //   - teams:   per-team bank patterns + member lists.
-//   - users:   per-email bank patterns, additive on top of shared+team grants.
+//   - users:   per-identity bank patterns, additive on top of shared+team grants.
+//
+// An "identity" is normally a human's Tailscale login email (e.g.
+// "alice@brickeye.com"). Tagged tailnet nodes — service/agent processes with
+// no personal login, such as an automated Hermes assistant — are identified
+// by their short tailnet hostname instead (e.g. "agent-product-assistant");
+// the same admins/shared/teams/users keys and glob matching apply to both,
+// since matching is purely string-based. See internal/identity.Resolve for
+// how the caller derives which one applies.
 //
 // Bank ids never contain "/", so path.Match "*" matches any bank name and
 // "team-sw-*" matches any bank starting with "team-sw-".
@@ -68,31 +76,33 @@ func Load(p string) (*ACL, error) {
 	return &a, nil
 }
 
-// IsAdmin reports whether email is an admin. Admins bypass all bank ACL checks
-// and may access unscoped paths (enumeration, metrics, docs, etc.).
-func (a *ACL) IsAdmin(email string) bool {
-	email = strings.ToLower(email)
+// IsAdmin reports whether identity is an admin. Admins bypass all bank ACL
+// checks and may access unscoped paths (enumeration, metrics, docs, etc.).
+func (a *ACL) IsAdmin(identity string) bool {
+	identity = strings.ToLower(identity)
 	for _, adm := range a.Admins {
-		if strings.ToLower(adm) == email {
+		if strings.ToLower(adm) == identity {
 			return true
 		}
 	}
 	return false
 }
 
-// Allowed reports whether email is permitted to access bankID.
+// Allowed reports whether identity is permitted to access bankID. identity is
+// an email for human callers or a tailnet hostname for tagged agent nodes
+// (see the package doc); matching is identical for both.
 //
 // Grant order:
 //  1. Admins → always true.
-//  2. Shared patterns → true for every authenticated user.
-//  3. Team banks → true if email is a member of any team whose bank pattern matches.
-//  4. User-specific banks → true if email has an explicit pattern that matches.
+//  2. Shared patterns → true for every authenticated caller.
+//  3. Team banks → true if identity is a member of any team whose bank pattern matches.
+//  4. Identity-specific banks → true if identity has an explicit pattern that matches.
 //
 // Default deny: no matching pattern → false.
-func (a *ACL) Allowed(email, bankID string) bool {
-	email = strings.ToLower(email)
+func (a *ACL) Allowed(identity, bankID string) bool {
+	identity = strings.ToLower(identity)
 
-	if a.IsAdmin(email) {
+	if a.IsAdmin(identity) {
 		return true
 	}
 
@@ -103,7 +113,7 @@ func (a *ACL) Allowed(email, bankID string) bool {
 	}
 
 	for _, t := range a.Teams {
-		if !memberOf(t.Members, email) {
+		if !memberOf(t.Members, identity) {
 			continue
 		}
 		for _, pat := range t.Banks {
@@ -113,7 +123,7 @@ func (a *ACL) Allowed(email, bankID string) bool {
 		}
 	}
 
-	if u, ok := a.Users[email]; ok {
+	if u, ok := a.Users[identity]; ok {
 		for _, pat := range u.Banks {
 			if matchPattern(pat, bankID) {
 				return true
@@ -131,9 +141,9 @@ func matchPattern(pat, name string) bool {
 	return ok
 }
 
-func memberOf(members []string, email string) bool {
+func memberOf(members []string, identity string) bool {
 	for _, m := range members {
-		if strings.ToLower(m) == email {
+		if strings.ToLower(m) == identity {
 			return true
 		}
 	}

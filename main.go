@@ -15,6 +15,7 @@ import (
 
 	"main/internal/authz"
 	"main/internal/config"
+	"main/internal/identity"
 	"main/internal/logger"
 	"main/internal/proxy"
 
@@ -130,16 +131,14 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Wrap LocalClient.WhoIs to return only the email string.
+		// Resolve email (human) or tailnet hostname (tagged agent node) —
+		// see internal/identity for the tag-vs-user distinction.
 		whoIs = func(ctx context.Context, addr string) (string, error) {
 			resp, err := lc.WhoIs(ctx, addr)
 			if err != nil {
 				return "", err
 			}
-			if resp == nil || resp.UserProfile == nil {
-				return "", nil
-			}
-			return resp.UserProfile.LoginName, nil
+			return identity.Resolve(resp), nil
 		}
 
 		// Upstream uses the host network (Railway private networking).

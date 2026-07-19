@@ -7,11 +7,17 @@
 #   admins  → full access to every bank AND unscoped paths (metrics, docs, bank list)
 #   shared  → bank patterns accessible to every authenticated tailnet user
 #   teams   → bank patterns for all members of the named team
-#   users   → per-email bank patterns (additive on top of shared + team grants)
+#   users   → per-identity bank patterns (additive on top of shared + team grants)
 #
-# Default deny: an email that matches no pattern is rejected with 403.
+# `users:` keys are normally an email (human tailnet member). A tagged
+# tailnet node — a service/agent process with no personal login, such as an
+# automated Hermes assistant — has no email; key it by the node's short
+# tailnet hostname instead (e.g. `agent-product-assistant`, no @ sign). The
+# proxy derives which kind of identity a caller has automatically (see
+# internal/identity) — no ACL syntax difference beyond the key itself.
+#
+# Default deny: an identity that matches no pattern is rejected with 403.
 # Reload without restart: send SIGHUP to the proxy process.
-
 admins:            # full access incl. enumeration/admin paths
   - richard@brickeye.com
 
@@ -56,3 +62,6 @@ users:             # per-person private grants, added to shared + team grants
     banks: [hermes-bob]
   carol@brickeye.com:
     banks: [hermes-carol]
+  # Tagged agent node, keyed by tailnet hostname (no email — see header note).
+  agent-product-assistant:
+    banks: [team-product, team-product-*]
