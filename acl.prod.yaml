@@ -1,9 +1,11 @@
 # hindsight-auth-proxy ACL
-# Updated: 2026-06-29 — real users wired in (richard/jessica/timw/sleiman); per-user private banks
+# Updated: 2026-07-31 — add tagged agent hostname agent-product-assistant → user-sleiman
+# Project: ai-memory / service: hindsight-auth-proxy (NOT product-brain)
 #
 # Bank id glob patterns use Go path.Match syntax.
-# Default deny: email with no matching pattern → 403.
-# Reload without restart: redeploy (ACL_YAML_CONTENT env var).
+# Default deny: identity with no matching pattern → 403.
+# Humans = Tailscale login email; tagged agents = short tailnet hostname.
+# Reload: update ACL_YAML_CONTENT and redeploy.
 
 admins:
   - richard@brickeye.com        # full access incl. unscoped paths
@@ -54,4 +56,7 @@ users:
   timw@brickeye.com:
     banks: [user-timw]
   sleiman@brickeye.com:
+    banks: [user-sleiman]
+  # Tagged Hermes node (WhoIs → hostname, not email / not tags)
+  agent-product-assistant:
     banks: [user-sleiman]
