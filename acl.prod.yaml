@@ -58,5 +58,6 @@ users:
   sleiman@brickeye.com:
     banks: [user-sleiman]
   # Tagged Hermes node (WhoIs → hostname, not email / not tags)
+  # Grant both role-default bank and any secrets-file override used in bootstrap tests.
   agent-product-assistant:
-    banks: [user-sleiman]
+    banks: [user-sleiman, agent-product-assistant]
