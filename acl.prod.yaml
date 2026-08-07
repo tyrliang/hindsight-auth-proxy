@@ -57,7 +57,14 @@ users:
     banks: [user-timw]
   sleiman@brickeye.com:
     banks: [user-sleiman]
+  david@brickeye.com:
+    banks: [user-david]
   # Tagged Hermes node (WhoIs → hostname, not email / not tags)
   # Grant both role-default bank and any secrets-file override used in bootstrap tests.
   agent-product-assistant:
     banks: [user-sleiman, agent-product-assistant]
+  # Hardware department Hermes node — native memory bank (agent identity)
+  # + david's personal bank (default profile serves David personally,
+  # mirrors agent-product-assistant's user-sleiman split).
+  agent-hardware-assistant:
+    banks: [agent-hardware-assistant, user-david]
