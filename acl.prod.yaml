@@ -46,7 +46,8 @@ teams:
   # Finance
   fin:
     banks: [team-fin, team-fin-*]
-    members: []
+    members:
+      - matija@brickeye.com
 
 users:
   richard@brickeye.com:
@@ -68,3 +69,10 @@ users:
   # mirrors agent-product-assistant's user-sleiman split).
   agent-hardware-assistant:
     banks: [agent-hardware-assistant, user-david]
+  matija@brickeye.com:
+    banks: [user-matija]
+  # Finance department Hermes node — native memory bank (agent identity)
+  # + Matija's personal bank (default profile serves Matija personally,
+  # mirrors hardware-assistant's user-david split).
+  agent-finance-assistant:
+    banks: [agent-finance-assistant, user-matija]
