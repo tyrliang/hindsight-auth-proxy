@@ -127,6 +127,7 @@ kill -HUP $(pgrep hindsight_auth_proxy)
 The proxy logs `"ACL reloaded"` on success or `"ACL reload failed; keeping previous ACL"` on error.
 
 See `acl.yaml.example` for the full schema. Key rules:
+- Mutating bank endpoints `aliases` (including individual aliases), `clone`, and `transfer/import` require an ACL admin in Hindsight 0.10+; alias reads remain bank-scoped.
 - `admins` — full access including unscoped paths (metrics, docs, bank list). Limit to ops.
 - `shared` — patterns for every authenticated tailnet user (e.g. `org-*`).
 - `teams` — bank globs for team members. Team slugs match LiteLLM teams.

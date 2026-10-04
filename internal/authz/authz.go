@@ -20,6 +20,7 @@ package authz
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"regexp"
@@ -156,6 +157,22 @@ var mcpRE = regexp.MustCompile(`^/mcp/([^/]+)(?:/|$)`)
 
 // apiRE matches /v1/<tenant>/banks/<bankID> or /v1/<tenant>/banks/<bankID>/...
 var apiRE = regexp.MustCompile(`^/v1/[^/]+/banks/([^/]+)(?:/|$)`)
+
+// adminOnlyRE matches bank-scoped Hindsight (>= 0.10) endpoints that create or
+// re-point a bank id taken from the query string or JSON body instead of the
+// path: aliases (add/update/remove), clone, transfer import. The path-scoped
+// ACL never sees that second bank id, so only admins may call them.
+var adminOnlyRE = regexp.MustCompile(`^/v1/[^/]+/banks/[^/]+/(aliases(/[^/]+)?|clone|transfer/import)/?$`)
+
+// RequiresAdmin reports whether a bank-scoped request must still come from an
+// ACL admin. Read-only methods (listing aliases) stay bank-scoped.
+func RequiresAdmin(method, p string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	}
+	return adminOnlyRE.MatchString(p)
+}
 
 // BankFromPath extracts the bank id from a Hindsight URL path.
 //

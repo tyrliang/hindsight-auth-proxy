@@ -52,11 +52,11 @@ func loadACL(t *testing.T) *authz.ACL {
 
 // upstreamSpy is a test upstream that records the last request it received.
 type upstreamSpy struct {
-	mu          sync.Mutex
-	lastAuth    string
-	lastPath    string
-	callCount   int
-	statusCode  int // response status to return (default 200)
+	mu         sync.Mutex
+	lastAuth   string
+	lastPath   string
+	callCount  int
+	statusCode int // response status to return (default 200)
 }
 
 func (s *upstreamSpy) handler() http.Handler {
@@ -105,6 +105,16 @@ func get(h http.Handler, path string, headers map[string]string) *httptest.Respo
 
 func post(h http.Handler, path string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+func do(h http.Handler, method, path string, headers map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, nil)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -473,4 +483,79 @@ func TestConcurrentRequests_NoRace(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestAdminOnlyBankEndpoints_NonAdmin_403(t *testing.T) {
+	spy := &upstreamSpy{}
+	upstream := httptest.NewServer(spy.handler())
+	defer upstream.Close()
+	h := newHandler(t, upstream, loadACL(t))
+	requests := []struct{ method, path string }{
+		{http.MethodPost, "/v1/default/banks/hermes-alice/clone?target_bank_id=team-x"},
+		{http.MethodPost, "/v1/default/banks/hermes-alice/aliases"},
+		{http.MethodPatch, "/v1/default/banks/hermes-alice/aliases/x"},
+		{http.MethodDelete, "/v1/default/banks/hermes-alice/aliases/x"},
+		{http.MethodPost, "/v1/default/banks/hermes-alice/transfer/import"},
+	}
+	for _, req := range requests {
+		t.Run(req.method+" "+req.path, func(t *testing.T) {
+			spy.reset()
+			rr := do(h, req.method, req.path, map[string]string{"X-Dev-User": "alice@brickeye.com"})
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("want %d, got %d", http.StatusForbidden, rr.Code)
+			}
+			spy.mu.Lock()
+			calls := spy.callCount
+			spy.mu.Unlock()
+			if calls != 0 {
+				t.Errorf("want 0 upstream calls, got %d", calls)
+			}
+		})
+	}
+}
+
+func TestAdminOnlyBankEndpoints_Admin_Proxied(t *testing.T) {
+	spy := &upstreamSpy{}
+	upstream := httptest.NewServer(spy.handler())
+	defer upstream.Close()
+	h := newHandler(t, upstream, loadACL(t))
+	requests := []struct{ method, path string }{
+		{http.MethodPost, "/v1/default/banks/hermes-alice/clone?target_bank_id=team-x"},
+		{http.MethodPost, "/v1/default/banks/hermes-alice/aliases"},
+		{http.MethodPatch, "/v1/default/banks/hermes-alice/aliases/x"},
+		{http.MethodDelete, "/v1/default/banks/hermes-alice/aliases/x"},
+		{http.MethodPost, "/v1/default/banks/hermes-alice/transfer/import"},
+	}
+	for _, req := range requests {
+		t.Run(req.method+" "+req.path, func(t *testing.T) {
+			spy.reset()
+			rr := do(h, req.method, req.path, map[string]string{"X-Dev-User": "richard@brickeye.com"})
+			if rr.Code != http.StatusOK {
+				t.Fatalf("want %d, got %d", http.StatusOK, rr.Code)
+			}
+			spy.mu.Lock()
+			calls := spy.callCount
+			spy.mu.Unlock()
+			if calls != 1 {
+				t.Errorf("want 1 upstream calls, got %d", calls)
+			}
+		})
+	}
+}
+
+func TestAliasList_BankScoped_200(t *testing.T) {
+	spy := &upstreamSpy{}
+	upstream := httptest.NewServer(spy.handler())
+	defer upstream.Close()
+	h := newHandler(t, upstream, loadACL(t))
+	rr := get(h, "/v1/default/banks/hermes-alice/aliases", map[string]string{"X-Dev-User": "alice@brickeye.com"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	spy.mu.Lock()
+	calls := spy.callCount
+	spy.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("want 1 upstream call, got %d", calls)
+	}
 }
