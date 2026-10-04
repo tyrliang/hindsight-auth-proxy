@@ -159,6 +159,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if scoped && authz.RequiresAdmin(r.Method, r.URL.Path) && !acl.IsAdmin(email) {
+		logger.Stdout.Info("admin-only bank endpoint denied",
+			slog.String("email", email), slog.String("bank", bankID),
+			slog.String("method", r.Method), slog.String("path", r.URL.Path))
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	logger.Stdout.Info("proxying request",
 		slog.String("email", email),
 		slog.String("bank", bankID),

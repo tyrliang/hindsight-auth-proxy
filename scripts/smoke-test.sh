@@ -13,6 +13,7 @@ keep=false
 [[ "${1:-}" == "--keep" ]] && keep=true
 
 GO="${GO:-go}"
+HINDSIGHT_IMAGE="${HINDSIGHT_IMAGE:-ghcr.io/vectorize-io/hindsight:latest}"
 BINARY="${app_dir}/.smoke-proxy-$$"
 UPSTREAM_PORT=18888
 PROXY_PORT=19090
@@ -38,7 +39,7 @@ docker run -d --name "${CONTAINER_NAME}" \
   -e HINDSIGHT_API_MCP_AUTH_TOKEN="${UPSTREAM_SECRET}" \
   -e HINDSIGHT_API_LLM_PROVIDER=none \
   -v "hs-smoke-$$:/home/hindsight/.pg0" \
-  ghcr.io/vectorize-io/hindsight:latest
+  "${HINDSIGHT_IMAGE}"
 
 # Wait for Hindsight to respond (up to 30s)
 echo "  Waiting for Hindsight health..."
@@ -175,6 +176,16 @@ assert_status "stranger → /mcp/hermes-stranger/ — no ACL entry → 403" 403 
 # case-insensitive email
 got=$(c -H 'X-Dev-User: ALICE@BRICKEYE.COM' "${BASE}/mcp/hermes-alice/")
 assert_forwarded "ALICE@BRICKEYE.COM → /mcp/hermes-alice/ — case-insensitive" "${got}"
+
+# Out-of-path bank targets require an admin, even on an allowed bank.
+got=$(c -X POST -H 'X-Dev-User: alice@brickeye.com' "${BASE}/v1/default/banks/hermes-alice/clone?target_bank_id=team-sw-x")
+assert_status "alice POST clone with target_bank_id — admin-only → 403" 403 "${got}"
+got=$(c -X POST -H 'X-Dev-User: alice@brickeye.com' "${BASE}/v1/default/banks/hermes-alice/aliases")
+assert_status "alice POST aliases — admin-only → 403" 403 "${got}"
+got=$(c -X POST -H 'X-Dev-User: richard@brickeye.com' "${BASE}/v1/default/banks/hermes-alice/aliases")
+assert_forwarded "richard POST aliases — admin, proxy forwards" "${got}"
+got=$(c -H 'X-Dev-User: alice@brickeye.com' "${BASE}/v1/default/banks/hermes-alice/aliases")
+assert_forwarded "alice GET aliases — bank-scoped, proxy forwards" "${got}"
 
 # SIGHUP reload
 echo ""

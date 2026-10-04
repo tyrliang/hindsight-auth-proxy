@@ -1,6 +1,7 @@
 package authz_test
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -166,5 +167,34 @@ func TestLoadMissingFile(t *testing.T) {
 	_, err := authz.Load("/nonexistent/path/acl.yaml")
 	if err == nil {
 		t.Error("Load of missing file should return error")
+	}
+}
+
+func TestRequiresAdmin(t *testing.T) {
+	tests := []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{http.MethodPost, "/v1/default/banks/b/aliases", true},
+		{http.MethodPost, "/v1/default/banks/b/aliases/", true},
+		{http.MethodPatch, "/v1/default/banks/b/aliases/x", true},
+		{http.MethodDelete, "/v1/default/banks/b/aliases/x", true},
+		{http.MethodGet, "/v1/default/banks/b/aliases", false},
+		{http.MethodHead, "/v1/default/banks/b/aliases", false},
+		{http.MethodOptions, "/v1/default/banks/b/aliases", false},
+		{http.MethodPost, "/v1/default/banks/b/clone", true},
+		{http.MethodPost, "/v1/default/banks/b/transfer/import", true},
+		{http.MethodPost, "/v1/default/banks/b/transfer/export", false},
+		{http.MethodPost, "/v1/default/banks/b/memories", false},
+		{http.MethodPost, "/mcp/b/", false},
+		{http.MethodPost, "/v1/default/banks", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			if got := authz.RequiresAdmin(tc.method, tc.path); got != tc.want {
+				t.Errorf("RequiresAdmin(%q, %q) = %v, want %v", tc.method, tc.path, got, tc.want)
+			}
+		})
 	}
 }
